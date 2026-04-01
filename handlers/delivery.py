@@ -576,21 +576,24 @@ async def change_date_request(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("apply_new_date:"))
 async def apply_date_fix(callback: types.CallbackQuery, session: AsyncSession):
     date_type = callback.data.split(":")[1]
-    new_date = datetime.now() if date_type == "today" else datetime.now() - timedelta(days=1)
+
+    # Делаем дату "чистой" (00:00:00)
+    now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    new_date = now if date_type == "today" else now - timedelta(days=1)
 
     user = await requests.get_user(session, callback.from_user.id)
     shift = await requests.get_active_shift(session, user.id)
 
-    # Меняем дату в базе
-    await requests.update_shift_date(session, shift.id, new_date)
+    if shift:
+        await requests.update_shift_date(session, shift.id, new_date)
+        await callback.answer(f"Дата изменена на {new_date.strftime('%d.%m')}", show_alert=True)
 
-    await callback.answer(f"Дата изменена на {new_date.strftime('%d.%m')}", show_alert=True)
-
-    # Возвращаем в меню петли
-    await callback.message.edit_text(
-        f"✅ Дата всей смены изменена на **{new_date.strftime('%d.%m.%Y')}**.\n"
-        "Все 4 садика (и любые другие данные) успешно перенесены.\n\n"
-        "Что делаем дальше?",
-        reply_markup=get_loop_kb(),
-        parse_mode="Markdown"
-    )
+        await callback.message.edit_text(
+            f"✅ Дата всей смены изменена на **{new_date.strftime('%d.%m.%Y')}**.\n"
+            "Все данные успешно перенесены.\n\n"
+            "Что делаем дальше?",
+            reply_markup=get_loop_kb(),
+            parse_mode="Markdown"
+        )
+    else:
+        await callback.answer("Ошибка: Активная смена не найдена", show_alert=True)

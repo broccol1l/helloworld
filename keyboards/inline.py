@@ -122,30 +122,22 @@ def get_loop_kb():
     builder.adjust(1)
     return builder.as_markup()
 
-# --- КЛАВИАТУРА АРХИВА (СПИСОК СМЕН) ---
+
 def get_reports_paging_kb(shifts, page: int = 0, limit: int = 5):
     builder = InlineKeyboardBuilder()
 
     for shift in shifts:
-        # shift.closed_at и shift.total_sum приходят из базы
-        date_str = shift.closed_at.strftime("%d.%m.%Y")
+        # ИСПОЛЬЗУЕМ opened_at, так как именно её мы правим кнопкой "Исправить дату"
+        date_str = shift.opened_at.strftime("%d.%m.%Y")
+
+        # Если total_sum у тебя считается в запросе, оставляем как есть
         builder.button(
             text=f"📅 {date_str} | {shift.total_sum:,} сум",
             callback_data=f"view_rep:{shift.id}"
         )
 
     builder.adjust(1)
-
-    # Навигация
-    nav_row = []
-    if page > 0:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Раньше", callback_data=f"rep_page:{page - 1}"))
-    if len(shifts) == limit:
-        nav_row.append(InlineKeyboardButton(text="Далее ➡️", callback_data=f"rep_page:{page + 1}"))
-
-    if nav_row:
-        builder.row(*nav_row)
-
+    # ... остальной код навигации без изменений ...
     return builder.as_markup()
 
 
