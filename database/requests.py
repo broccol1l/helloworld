@@ -149,10 +149,10 @@ async def get_kg_deliveries_in_shift(session: AsyncSession, shift_id: int, kg_id
 
 # 1. Ищем открытую смену (is_closed == False)
 async def get_active_shift(session: AsyncSession, user_id: int):
-    result = await session.execute(
-        select(Shift).where(Shift.user_id == user_id, Shift.is_closed == False)
-    )
-    return result.scalar_one_or_none()
+    query = select(Shift).where(Shift.user_id == user_id, Shift.is_closed == False).order_by(Shift.id.desc())
+    result = await session.execute(query)
+    # Используем scalars().first() вместо scalar_one_or_none()
+    return result.scalars().first()
 
 # 2. Создаем смену с конкретной датой
 async def create_shift_with_date(session: AsyncSession, user_id: int, date: datetime):
