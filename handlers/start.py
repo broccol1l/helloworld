@@ -9,6 +9,7 @@ from keyboards.reply import get_register_kb, main_menu_kb
 
 router = Router()
 
+
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext, session: AsyncSession):
     user = await requests.get_user(session, message.from_user.id)
@@ -19,41 +20,52 @@ async def cmd_start(message: types.Message, state: FSMContext, session: AsyncSes
         await message.answer("Привет! Вы не зарегистрированы в системе.\nВведите ваше Имя и Фамилию:")
         await state.set_state(Register.name)
 
+
 @router.message(Register.name)
 async def reg_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-
     await message.answer("Теперь отправьте свой номер телефона", reply_markup=get_register_kb())
     await state.set_state(Register.phone)
+
 
 @router.message(Register.phone, F.contact)
 async def reg_phone(message: types.Message, state: FSMContext, session: AsyncSession):
     data = await state.get_data()
 
+    # Используем наш новый requests.add_user
     await requests.add_user(
         session=session,
         tg_id=message.from_user.id,
-        full_name=data["name"],
-        phone_number=message.contact.phone_number
+        full_name=data["name"]
+        # Если добавил phone_number в модель, добавь его и сюда
     )
     await state.clear()
     await message.answer("Регистрация завершена", reply_markup=main_menu_kb())
 
-@router.message(Register.phone)
-async def reg_phone_error(message: types.Message):
-    await message.answer("Пожалуйста, используйте кнопку **«📱 Отправить контакт»**.\n\n"
-        "Мы принимаем номер только через кнопку, чтобы данные были верными.",
-        reply_markup=get_register_kb(),
-        parse_mode="Markdown")
 
+# Хендлер нажатия на кнопку "Изменить имя"
 @router.message(F.text == "📝 Изменить имя")
 async def edit_name_start(message: types.Message, state: FSMContext):
-    await message.answer("Введите новое Имя и Фамилию:")
+    await message.answer("Введите ваше новое Имя и Фамилию:")
     await state.set_state(EditName.name)
 
+
+# Хендлер получения нового имени
 @router.message(EditName.name)
-async def edit_name_done(message: types.Message, state: FSMContext, session: AsyncSession):
-    await requests.update_user_name(session, message.from_user.id, message.text)
+async def edit_name_finish(message: types.Message, state: FSMContext, session: AsyncSession):
+    new_name = message.text
+
+    # Обновляем имя в базе (используем существующий requests или прямо здесь)
+    # Предположим, у тебя в requests.py есть функция update_user_name или сделаем через update
+    from sqlalchemy import update
+    from database.models import User
+
+    await session.execute(
+        update(User).where(User.id == message.from_user.id).values(full_name=new_name)
+    )
+    await session.commit()
+
     await state.clear()
-    await message.answer(f"Готово! Вы изменили имя на {message.text}",
-                         reply_markup=main_menu_kb())
+    await message.answer(f"✅ Готово! Теперь я буду называть вас: **{new_name}**",
+                         reply_markup=main_menu_kb(),
+                         parse_mode="Markdown")

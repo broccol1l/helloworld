@@ -12,13 +12,22 @@ def get_register_kb():
         one_time_keyboard=True
     )
 
-def main_menu_kb():
+
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+
+
+def main_menu_kb(is_admin: bool = False):
+    buttons = [
+        [KeyboardButton(text="📦 Добавить отгрузку")],
+        [KeyboardButton(text="📊 Мои отчеты"), KeyboardButton(text="🏁 Завершить смену")],
+        [KeyboardButton(text="📝 Изменить имя")]
+    ]
+
+    if is_admin:
+        buttons.append([KeyboardButton(text="⚙️ Админ-панель")])
+
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📦 Добавить отгрузку")],
-            [KeyboardButton(text="⛽ Заправить / Закрыть смену")],
-            [KeyboardButton(text="📝 Изменить имя")]
-        ],
+        keyboard=buttons,
         resize_keyboard=True
     )
 

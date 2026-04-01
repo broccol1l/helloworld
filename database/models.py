@@ -1,64 +1,95 @@
-from typing import List
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, BigInteger, DateTime, func
+from sqlalchemy.orm import DeclarativeBase, relationship
 
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy import BigInteger, Column, ForeignKey, Integer, String, Text, DateTime, Boolean, Float
-from datetime import datetime
 
 class Base(DeclarativeBase):
     pass
 
 
 class User(Base):
-    __tablename__ = "users"
+    __tablename__ = 'users'
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    tg_id: Mapped[int] = mapped_column(BigInteger, unique=True)
-    full_name: Mapped[str] = mapped_column(String(100))
-    phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    id = Column(BigInteger, primary_key=True)  # Telegram ID
+    full_name = Column(String)
+    is_admin = Column(Boolean, default=False)
 
-    shifts: Mapped[List["Shift"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    shifts = relationship("Shift", back_populates="driver")
 
-class Deliveries(Base):
-    __tablename__ = "deliveries"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    shift_id: Mapped[int] = mapped_column(ForeignKey("shifts.id"))
+class Kindergarten(Base):
+    __tablename__ = 'kindergartens'
 
-    object_name: Mapped[str] = mapped_column(String(100)) # Название садика
-    weight_plan: Mapped[float] = mapped_column(Float) # План (кг)
-    weight_fact: Mapped[float] = mapped_column(Float) # Факт (кг) сколько принял садик
-    price_per_kg: Mapped[int] = mapped_column()
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False, unique=True)
+    # is_active нужен, чтобы "удаленный" садик не мешал в списке,
+    # но данные о его старых отгрузках не пропали из базы.
+    is_active = Column(Boolean, default=True)
 
-    date: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    deliveries = relationship("Delivery", back_populates="kindergarten")
 
-    shift: Mapped["Shift"] = relationship(back_populates="deliveries")
 
-    @property
-    def diff(self) -> str:
-        """ Разница между планом и фактом  | Разница в таблице"""
-        val = round(self.weight_plan - self.weight_fact, 2)
-        if val > 0:
-            return f"⚠️ Недостача {val} кг"
-        return "✅ Норма"
+class Product(Base):
+    __tablename__ = 'products'
 
-    @property
-    def total_price(self) -> int:
-        """ Итоговая сумма(факт кг сколько принял садик * цена за кг мяса) | Сумма в таблице """
-        return int(self.weight_fact * self.price_per_kg)
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    unit = Column(String, default="кг")
+    price_sadik = Column(Float, default=0.0)
+    price_zakup = Column(Float, default=0.0)
 
 
 class Shift(Base):
-    __tablename__ = "shifts"
+    __tablename__ = 'shifts'
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    driver_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'))
+    opened_at = Column(DateTime, default=func.now())
+    closed_at = Column(DateTime, nullable=True)
+    is_closed = Column(Boolean, default=False)
+    fuel_expense = Column(Float, default=0.0)
 
-    date: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    driver = relationship("User", back_populates="shifts")
+    deliveries = relationship("Delivery", back_populates="shift")
 
-    fuel_expense: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=True)
-    is_closed: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    user: Mapped["User"] = relationship(back_populates="shifts")
-    deliveries: Mapped[List["Deliveries"]] = relationship(back_populates="shift", cascade="all, delete-orphan")
+class Delivery(Base):
+    __tablename__ = 'deliveries'
 
+    id = Column(Integer, primary_key=True)
+    shift_id = Column(Integer, ForeignKey('shifts.id'))
+    product_id = Column(Integer, ForeignKey('products.id'))
+    # Теперь ссылаемся на ID садика вместо просто текста
+    kindergarten_id = Column(Integer, ForeignKey('kindergartens.id'))
+
+    weight_plan = Column(Float)
+    weight_fact = Column(Float)
+
+    p_sadik_fact = Column(Float)
+    p_zakup_fact = Column(Float)
+
+    shift = relationship("Shift", back_populates="deliveries")
+    product = relationship("Product")
+    kindergarten = relationship("Kindergarten", back_populates="deliveries")
+
+    @property
+    def total_price_sadik(self):
+        """$$Total = weight\_fact \times p\_sadik\_fact$$"""
+        return round(self.weight_fact * self.p_sadik_fact, 2)
+
+    @property
+    def total_cost_zakup(self):
+        """$$Cost = weight\_fact \times p\_zakup\_fact$$"""
+        return round(self.weight_fact * self.p_zakup_fact, 2)
+
+    @property
+    def net_profit(self):
+        """Чистая прибыль"""
+        return round(self.total_price_sadik - self.total_cost_zakup, 2)
+
+    @property
+    def diff_text(self) -> str:
+        val = round(self.weight_plan - self.weight_fact, 2)
+        unit = self.product.unit if self.product else "ед."
+        if val > 0:
+            return f"⚠️ Недостача {val} {unit}"
+        return f"✅ Норма ({unit})"

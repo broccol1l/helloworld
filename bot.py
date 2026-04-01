@@ -2,7 +2,7 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher
 from config import config
-from handlers import start, delivery
+from handlers import start, delivery, reports
 
 from database.engine import async_session, init_db
 from database.middlewares import DbSessionMiddleware
@@ -18,6 +18,7 @@ async def main():
 
     dp.include_router(start.router)
     dp.include_router(delivery.router)
+    dp.include_router(reports.router)
 
     dp.update.middleware(DbSessionMiddleware(session_pool=async_session))
 
