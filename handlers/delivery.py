@@ -258,34 +258,22 @@ async def close_shift_start(message: types.Message, state: FSMContext, session: 
 
 @router.message(DeliveryState.waiting_fuel)
 async def close_shift_done(message: types.Message, state: FSMContext, session: AsyncSession):
-
-    # Очищаем текст (на случай, если нажали кнопку "0 (не заправлялся)")
     fuel_text = message.text.split(' ')[0]
 
     try:
-        # Пробуем превратить ввод в число
         fuel_amount = float(fuel_text.replace(',', '.'))
-
-        # Получаем ID смены из памяти
         data = await state.get_data()
         shift_id = data.get('shift_id')
 
-        # 1. Загружаем данные для финального отчета
         deliveries = await requests.get_shift_deliveries(session, shift_id)
-        # Получаем текущего юзера, чтобы проверить его статус админа
         user = await requests.get_user(session, message.from_user.id)
 
-        # Если за смену вообще ничего не возили
         if not deliveries:
             await requests.close_shift(session, shift_id, fuel_amount)
             await state.clear()
-            await message.answer(
-                "🏁 Смена закрыта. Отгрузок сегодня не было.",
-                reply_markup=main_menu_kb(user.is_admin)  # Показываем меню (с кнопкой админа, если надо)
-            )
+            await message.answer("🏁 Смена закрыта. Отгрузок сегодня не было.", reply_markup=main_menu_kb(user.is_admin))
             return
 
-        # 2. Формируем красивый отчет по всем садикам
         report = "📝 <b>ИТОГ ВАШЕЙ СМЕНЫ:</b>\n\n"
         kg_data = {}
         total_shift_sum = 0
@@ -295,42 +283,35 @@ async def close_shift_done(message: types.Message, state: FSMContext, session: A
             if kg_name not in kg_data:
                 kg_data[kg_name] = {"items": [], "total": 0}
 
-            p_name = d.product.name
-            unit = d.product.unit
             price = d.total_price_sadik
-
-            # Добавляем строку товара в отчет садика
             kg_data[kg_name]["items"].append(
-                f"  ◦ {p_name}: {d.weight_fact} {unit} — <b>{price:,} сум</b>"
-            )
+                f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} — <b>{price:,} сум</b>")
             kg_data[kg_name]["total"] += price
             total_shift_sum += price
 
-        # Собираем текст по каждому садику
         for name, info in kg_data.items():
             report += f"🏫 <b>{name}</b>\n"
             report += "\n".join(info["items"]) + "\n"
             report += f"   🏷 Итого: <b>{info['total']:,} сум</b>\n\n"
 
-        report += f"⛽ Бензин: <b>{fuel_amount:,} сум</b>\n"
-        report += f"💰 <b>ОБЩАЯ ВЫРУЧКА: {total_shift_sum:,} сум</b>\n\n"
-        report += "🏁 Смена закрыта. Хорошего отдыха!"
+        # --- ВОТ ТУТ МЕНЯЕМ ВЫВОД ---
+        # Считаем чистую сумму прямо здесь для текста
+        final_net_amount = total_shift_sum - fuel_amount
 
-        # 3. Сохраняем данные в базу и очищаем состояние
+        report += f"💰 Общая выручка: {total_shift_sum:,} сум\n"
+        report += f"⛽ Бензин: -{fuel_amount:,} сум\n"
+        report += "───────────────────\n"
+        report += f"💵 <b>ИТОГО К ВЫДАЧЕ: {final_net_amount:,} сум</b>\n\n"  # Теперь водитель видит разницу
+        report += "🏁 Смена закрыта. Хорошего отдыха!"
+        # ----------------------------
+
         await requests.close_shift(session, shift_id, fuel_amount)
         await state.clear()
 
-        # 4. Отправляем финальный отчет и возвращаем основное меню
-        await message.answer(
-            report,
-            reply_markup=main_menu_kb(user.is_admin),  # Кнопка "0" удалится, появится меню
-            parse_mode="HTML"
-        )
+        await message.answer(report, reply_markup=main_menu_kb(user.is_admin), parse_mode="HTML")
 
     except ValueError:
         await message.answer("Ошибка! Введите сумму расхода цифрами (например: 50000) или 0.")
-
-
 # Показываем садики, которые уже ввел водитель в этой смене
 @router.callback_query(F.data == "manage_current_shift")
 async def manage_current(callback: types.CallbackQuery, session: AsyncSession):

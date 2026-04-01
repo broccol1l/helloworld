@@ -107,16 +107,16 @@ async def get_user_shifts(session: AsyncSession, user_id: int, limit: int = 5, o
     query = (
         select(
             Shift.id,
-            Shift.opened_at,  # <-- ДОБАВИЛИ ЭТО ПОЛЕ
+            Shift.opened_at,
             Shift.closed_at,
-            # Считаем сумму по ЗАМОРОЖЕННОЙ цене p_sadik_fact
-            func.sum(Delivery.weight_fact * Delivery.p_sadik_fact).label('total_sum')
+            Shift.fuel_expense,
+            # Считаем сумму товаров и ВЫЧИТАЕМ бензин прямо в запросе
+            (func.sum(Delivery.weight_fact * Delivery.p_sadik_fact) - func.coalesce(Shift.fuel_expense, 0)).label('total_sum')
         )
         .join(Delivery, Delivery.shift_id == Shift.id)
         .where(Shift.user_id == user_id, Shift.is_closed == True)
-        # Добавляем opened_at в группировку, иначе база выдаст ошибку
-        .group_by(Shift.id, Shift.opened_at, Shift.closed_at)
-        # Сортируем теперь тоже по рабочей дате (opened_at)
+        # Группируем по всем полям, которые есть в SELECT (кроме суммы)
+        .group_by(Shift.id, Shift.opened_at, Shift.closed_at, Shift.fuel_expense)
         .order_by(Shift.opened_at.desc())
         .limit(limit)
         .offset(offset)

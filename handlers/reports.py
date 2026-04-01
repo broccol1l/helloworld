@@ -74,7 +74,7 @@ async def show_my_reports(event: types.Message | types.CallbackQuery, session: A
 async def view_single_report(callback: types.CallbackQuery, session: AsyncSession):
     shift_id = int(callback.data.split(":")[1])
 
-    # Получаем данные смены (чтобы вытянуть бензин и дату)
+    # Получаем данные смены
     shift = await requests.get_shift_by_id(session, shift_id)
     # Получаем все отгрузки этой смены
     deliveries = await requests.get_shift_deliveries(session, shift_id)
@@ -85,7 +85,6 @@ async def view_single_report(callback: types.CallbackQuery, session: AsyncSessio
 
     report_text = f"📋 **Отчет за {shift.opened_at.strftime('%d.%m.%Y')}**\n\n"
     total_sum = 0
-
     for d in deliveries:
         report_text += (
             f"🏫 {d.kindergarten.name}\n"
@@ -93,15 +92,17 @@ async def view_single_report(callback: types.CallbackQuery, session: AsyncSessio
         )
         total_sum += d.total_price_sadik
 
-    report_text += f"\n⛽ Бензин: **{shift.fuel_expense:,} сум**"
-    report_text += f"\n💰 **ОБЩАЯ СУММА: {total_sum:,} сум**"
+    # --- ВОТ ТУТ ГЛАВНОЕ ИЗМЕНЕНИЕ ---
+    fuel = shift.fuel_expense or 0  # Берем бензин (если там NULL, то 0)
+    final_amount = total_sum - fuel  # Вычитаем из общей суммы товаров бензин
 
-    # ВЫЗЫВАЕМ ГОТОВУЮ КЛАВИАТУРУ ИЗ inline.py
+    report_text += f"\n⛽ Бензин: **{fuel:,} сум**"
+    report_text += f"\n💰 **ОБЩАЯ ВЫРУЧКА: {total_sum:,} сум**"
+    report_text += f"\n💵 **ИТОГО К ВЫДАЧЕ: {final_amount:,} сум**"  # Выводим чистый итог
+    # ---------------------------------
+
     kb = inline.get_report_details_kb(shift_id)
-
     await callback.message.edit_text(report_text, reply_markup=kb, parse_mode="Markdown")
-    await callback.answer()
-
 
 # 3. Жесткое удаление отчета
 @router.callback_query(F.data.startswith("del_rep:"))
