@@ -32,15 +32,22 @@ async def reg_name(message: types.Message, state: FSMContext):
 async def reg_phone(message: types.Message, state: FSMContext, session: AsyncSession):
     data = await state.get_data()
 
-    # Используем наш новый requests.add_user
+    # Вытаскиваем номер телефона из присланного контакта
+    user_phone = message.contact.phone_number
+
+    # Передаем и имя, и телефон в базу
     await requests.add_user(
         session=session,
         tg_id=message.from_user.id,
-        full_name=data["name"]
-        # Если добавил phone_number в модель, добавь его и сюда
+        full_name=data["name"],
+        phone=user_phone
     )
+
     await state.clear()
-    await message.answer("Регистрация завершена", reply_markup=main_menu_kb())
+    await message.answer(
+        f"Регистрация завершена!\nИмя: {data['name']}\nТел: {user_phone}",
+        reply_markup=main_menu_kb()
+    )
 
 
 # Хендлер нажатия на кнопку "Изменить имя"

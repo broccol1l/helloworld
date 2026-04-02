@@ -7,6 +7,12 @@ from aiogram.fsm.context import FSMContext  # ДОБАВЬ ЭТУ СТРОКУ
 from database import requests
 from keyboards import inline  # Импорт твоих новых функций из inline.py
 from utils.states import DeliveryState # И ЭТУ (нужна для редактирования)
+
+
+from aiogram.types import FSInputFile
+from utils.exporters import create_shift_excel, create_shift_pdf
+
+
 router = Router()
 
 
@@ -154,3 +160,67 @@ async def edit_old_report(callback: types.CallbackQuery, state: FSMContext, sess
 async def edit_start_add(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
     from handlers.delivery import show_kindergartens
     await show_kindergartens(callback.message, state, session)
+
+
+
+
+
+@router.callback_query(F.data.startswith("export_xlsx:"))
+async def handle_export_xlsx(callback: types.CallbackQuery, session: AsyncSession):
+    shift_id = int(callback.data.split(":")[1])
+
+    # Тот самый запрос, который мы обсуждали
+    shift = await requests.get_shift_full_details(session, shift_id)
+
+    if not shift or not shift.deliveries:
+        await callback.answer("Данные для экспорта не найдены", show_alert=True)
+        return
+
+    await callback.answer("⏳ Файл создается...")
+
+    # Генерируем и отправляем
+    path = create_shift_excel(shift)
+    document = FSInputFile(path)
+
+    await callback.message.answer_document(
+        document,
+        caption=f"📗 Excel-отчет за {shift.opened_at.strftime('%d.%m.%Y')}"
+    )
+
+
+@router.callback_query(F.data.startswith("export_pdf:"))
+async def handle_export_pdf(callback: types.CallbackQuery, session: AsyncSession):
+    # 1. Вытаскиваем ID смены из колбэка
+    shift_id = int(callback.data.split(":")[1])
+
+    # 2. Получаем полные данные смены (водитель, товары, садики)
+    shift = await requests.get_shift_full_details(session, shift_id)
+
+    if not shift or not shift.deliveries:
+        await callback.answer("Данные для этого отчета не найдены.", show_alert=True)
+        return
+
+    # Уведомляем пользователя, что процесс пошел (чтобы он не тыкал кнопку дважды)
+    await callback.answer("⏳ Генерирую PDF-файл...")
+
+    # 3. Проверяем права пользователя (админ видит прибыль, водитель — нет)
+    user = await requests.get_user(session, callback.from_user.id)
+
+    try:
+        # 4. Вызываем генератор PDF из utils/exporters.py
+        # Передаем is_admin=True/False, чтобы отчет был правильного типа
+        pdf_path = create_shift_pdf(shift, is_admin=user.is_admin)
+
+        # 5. Подготавливаем файл для отправки
+        document = FSInputFile(pdf_path)
+
+        # 6. Отправляем PDF пользователю
+        await callback.message.answer_document(
+            document=document,
+            caption=f"📄 PDF-отчет за {shift.opened_at.strftime('%d.%m.%Y')}\nВодитель: {shift.driver.full_name}"
+        )
+
+    except Exception as e:
+        # Если что-то пошло не так (например, не нашелся шрифт), сообщаем об ошибке
+        await callback.message.answer(f"❌ Ошибка при создании PDF: {e}")
+        print(f"Ошибка PDF: {e}")  # Для отладки в консоли

@@ -145,12 +145,19 @@ def get_reports_paging_kb(shifts, page: int = 0, limit: int = 5):
 def get_report_details_kb(shift_id: int):
     builder = InlineKeyboardBuilder()
 
-    # НОВАЯ КНОПКА
+    # РЯД 1: Кнопки выгрузки (добавили новые)
+    builder.button(text="📗 Excel", callback_data=f"export_xlsx:{shift_id}")
+    builder.button(text="📄 PDF", callback_data=f"export_pdf:{shift_id}")
+
+    # РЯД 2: ТВОЙ ОРИГИНАЛЬНЫЙ ТЕКСТ (ничего не меняем)
     builder.button(text="✏️ Редактировать (добавить/удалить)", callback_data=f"edit_rep:{shift_id}")
 
+    # РЯД 3: Удаление и Назад
     builder.button(text="🗑 Удалить отчет", callback_data=f"del_rep:{shift_id}")
     builder.button(text="⬅️ Назад к списку", callback_data="rep_page:0")
-    builder.adjust(1)
+
+    # Сетка: 2 кнопки (экспорт), 1 кнопка (редакт), 2 кнопки (удалить/назад)
+    builder.adjust(2, 1, 2)
     return builder.as_markup()
 
 

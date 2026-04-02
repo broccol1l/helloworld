@@ -12,6 +12,7 @@ class User(Base):
     id = Column(BigInteger, primary_key=True)  # Telegram ID
     full_name = Column(String)
     is_admin = Column(Boolean, default=False)
+    phone = Column(String)
 
     shifts = relationship("Shift", back_populates="driver")
 

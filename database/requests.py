@@ -8,8 +8,13 @@ async def get_user(session: AsyncSession, tg_id: int):
     return await session.get(User, tg_id)
 
 
-async def add_user(session: AsyncSession, tg_id: int, full_name: str):
-    user = User(id=tg_id, full_name=full_name)
+# Обновляем функцию регистрации
+async def add_user(session: AsyncSession, tg_id: int, full_name: str, phone: str):
+    user = User(
+        id=tg_id,
+        full_name=full_name,
+        phone=phone  # Теперь сохраняем телефон в новую колонку
+    )
     session.add(user)
     await session.commit()
     return user
@@ -190,3 +195,18 @@ async def unclose_shift(session: AsyncSession, shift_id: int):
         update(Shift).where(Shift.id == shift_id).values(is_closed=False)
     )
     await session.commit()
+
+
+# Эта функция остается для будущего экспорта
+async def get_shift_full_details(session: AsyncSession, shift_id: int):
+    query = (
+        select(Shift)
+        .options(
+            selectinload(Shift.driver),
+            selectinload(Shift.deliveries).selectinload(Delivery.product),
+            selectinload(Shift.deliveries).selectinload(Delivery.kindergarten)
+        )
+        .where(Shift.id == shift_id)
+    )
+    result = await session.execute(query)
+    return result.scalar_one_or_none()
