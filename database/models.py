@@ -14,6 +14,9 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     phone = Column(String)
 
+    is_blocked = Column(Boolean, default=False)  # Для бана
+    is_visible_in_admin = Column(Boolean, default=True)  # Для Soft Delete из списка админа
+
     shifts = relationship("Shift", back_populates="driver")
 
 
@@ -37,6 +40,8 @@ class Product(Base):
     unit = Column(String, default="кг")
     price_sadik = Column(Float, default=0.0)
     price_zakup = Column(Float, default=0.0)
+
+    is_active = Column(Boolean, default=True)
 
 
 class Shift(Base):
@@ -74,12 +79,12 @@ class Delivery(Base):
 
     @property
     def total_price_sadik(self):
-        """$$Total = weight\_fact \times p\_sadik\_fact$$"""
+        r"""$$Total = weight\_fact \times p\_sadik\_fact$$"""  # Добавили r в начале
         return round(self.weight_fact * self.p_sadik_fact, 2)
 
     @property
     def total_cost_zakup(self):
-        """$$Cost = weight\_fact \times p\_zakup\_fact$$"""
+        r"""$$Cost = weight\_fact \times p\_zakup\_fact$$"""  # И здесь тоже
         return round(self.weight_fact * self.p_zakup_fact, 2)
 
     @property

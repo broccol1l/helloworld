@@ -1,18 +1,55 @@
 from typing import Callable, Dict, Any, Awaitable
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
+from aiogram.types import TelegramObject, Message, CallbackQuery
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import select
+from database.models import User # Проверь путь к модели User
 
 class DbSessionMiddleware(BaseMiddleware):
     def __init__(self, session_pool: async_sessionmaker):
         self.session_pool = session_pool
 
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: Dict[str, Any]
-    ) -> Any:
+    async def __call__(self, handler, event, data):
         async with self.session_pool() as session:
-            data['session'] = session # Магия: сессия теперь доступна в хендлере как аргумент 'session'
+            data['session'] = session
             return await handler(event, data)
+
+# --- НОВАЯ МИДЛВАРЬ ---
+class CheckUserMiddleware(BaseMiddleware):
+    async def __call__(
+            self,
+            handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+            event: TelegramObject,
+            data: Dict[str, Any]
+    ) -> Any:
+        # В aiogram 3 апдейт передает юзера в словаре data под ключом 'event_from_user'
+        user_tg = data.get("event_from_user")
+
+        # Если это техническое обновление без юзера — просто идем дальше
+        if not user_tg:
+            return await handler(event, data)
+
+        session = data.get('session')
+        user_id = user_tg.id
+
+        # Ищем пользователя в базе
+        from database.models import User
+        from sqlalchemy import select
+
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+
+        # Если заблокирован — стоп
+        if user and user.is_blocked:
+            # Проверяем, сообщение это или нажатие кнопки, чтобы ответить правильно
+            if data.get("event_chat"):  # Если есть чат, значит можем отправить сообщение
+                from aiogram.types import Message, CallbackQuery
+                if isinstance(event.event, Message):
+                    await event.event.answer("🚫 **Доступ закрыт.**\nВы заблокированы администратором.")
+                elif isinstance(event.event, CallbackQuery):
+                    await event.event.answer("🚫 Доступ закрыт.", show_alert=True)
+            return
+
+            # Сохраняем юзера в data, чтобы он был под рукой в хендлерах
+        data['user'] = user
+        return await handler(event, data)

@@ -17,18 +17,21 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 
 def main_menu_kb(is_admin: bool = False):
+    # Основные кнопки для водителя
     buttons = [
         [KeyboardButton(text="📦 Добавить отгрузку")],
         [KeyboardButton(text="📊 Мои отчеты"), KeyboardButton(text="🏁 Завершить смену")],
         [KeyboardButton(text="📝 Изменить имя")]
     ]
 
+    # Если зашел босс — добавляем кнопку управления
     if is_admin:
         buttons.append([KeyboardButton(text="⚙️ Админ-панель")])
 
     return ReplyKeyboardMarkup(
         keyboard=buttons,
-        resize_keyboard=True
+        resize_keyboard=True,
+        input_field_placeholder="Выберите действие..."
     )
 
 def get_objects_kb():
