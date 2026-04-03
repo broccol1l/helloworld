@@ -162,24 +162,22 @@ async def edit_start_add(callback: types.CallbackQuery, state: FSMContext, sessi
     await show_kindergartens(callback.message, state, session)
 
 
-
-
-
 @router.callback_query(F.data.startswith("export_xlsx:"))
 async def handle_export_xlsx(callback: types.CallbackQuery, session: AsyncSession):
     shift_id = int(callback.data.split(":")[1])
-
-    # Тот самый запрос, который мы обсуждали
     shift = await requests.get_shift_full_details(session, shift_id)
 
     if not shift or not shift.deliveries:
-        await callback.answer("Данные для экспорта не найдены", show_alert=True)
+        await callback.answer("Данные не найдены", show_alert=True)
         return
 
-    await callback.answer("⏳ Файл создается...")
+    await callback.answer("⏳ Генерирую Excel...")
 
-    # Генерируем и отправляем
-    path = create_shift_excel(shift)
+    # Проверяем админа
+    user = await requests.get_user(session, callback.from_user.id)
+
+    # Передаем user.is_admin в генератор
+    path = create_shift_excel(shift, is_admin=user.is_admin)
     document = FSInputFile(path)
 
     await callback.message.answer_document(
