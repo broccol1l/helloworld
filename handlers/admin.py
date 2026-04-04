@@ -1,5 +1,6 @@
+import os
 from datetime import datetime, timedelta
-
+from fpdf import FPDF
 from aiogram.dispatcher.event.bases import SkipHandler
 
 from aiogram import Router, F, types
@@ -16,7 +17,8 @@ from aiogram.types import FSInputFile, BufferedInputFile
 from database.requests import (get_user_shifts, update_shift_date, get_user, delete_shift_full,
                                get_shift_by_id, get_shift_deliveries, unclose_shift,
                                delete_kg_from_active_shift, get_dashboard_stats,
-                               get_drivers_performance, get_all_deliveries_for_export)
+                               get_drivers_performance, get_all_deliveries_for_export,
+                               get_deliveries_by_period)
 
 # Импортируем твои модели, стейты и клавиатуры
 from database.models import User, Product, Kindergarten, Shift, Delivery
@@ -1132,121 +1134,121 @@ async def admin_stats_drivers_list(callback: types.CallbackQuery, session: Async
     )
 
 
-@router.callback_query(F.data == "adm_stats_export_all:xlsx")
-async def admin_export_global_excel(callback: types.CallbackQuery, session: AsyncSession):
-    await callback.answer("⏳ Формирую детальный отчет с итогами...", show_alert=False)
-
-    raw_data = await get_all_deliveries_for_export(session)
-
-    if not raw_data:
-        await callback.answer("❌ Нет данных для экспорта", show_alert=True)
-        return
-
-    df = pd.DataFrame(raw_data)
-    df['Дата'] = pd.to_datetime(df['Дата']).dt.strftime('%d.%m.%Y %H:%M')
-
-    # --- УМНЫЙ РАСЧЕТ БЕНЗИНА ---
-    # 1. Если бензин не указан (None), ставим 0
-    df['Бензин_Смены'] = df['Бензин_Смены'].fillna(0).astype(float)
-
-    # 2. Считаем, сколько всего отгрузок было в каждой смене
-    shift_counts = df.groupby('shift_id')['shift_id'].transform('count')
-
-    # 3. Размазываем бензин поровну на все отгрузки этой смены
-    df['Бензин (доля)'] = df['Бензин_Смены'] / shift_counts
-
-    # 4. Считаем ЧИСТУЮ маржу: Выручка - Закуп - Бензин
-    df['Прибыль_Маржа'] = df['Выручка'] - df['Закуп_сумма'] - df['Бензин (доля)']
-
-    # Удаляем технические колонки (они не нужны бухгалтеру)
-    df = df.drop(columns=['shift_id', 'Бензин_Смены'])
-
-    # --- СВОДНЫЕ ТАБЛИЦЫ ---
-    kg_summary = df.groupby("Садик").agg({
-        "Выручка": "sum",
-        "Закуп_сумма": "sum",
-        "Бензин (доля)": "sum",  # Добавили бензин
-        "Прибыль_Маржа": "sum",
-        "Факт": "count"
-    }).rename(columns={"Факт": "Кол_во_отгрузок"}).reset_index()
-
-    prod_summary = df.groupby("Товар").agg({
-        "Факт": "sum",
-        "Выручка": "sum",
-        "Закуп_сумма": "sum",
-        "Бензин (доля)": "sum",  # Добавили бензин
-        "Прибыль_Маржа": "sum"
-    }).reset_index()
-
-    # --- ДОБАВЛЯЕМ СТРОКИ "ИТОГО:" ---
-    totals_log = pd.DataFrame([{
-        'Дата': 'ИТОГО:',
-        'План': df['План'].sum(),
-        'Факт': df['Факт'].sum(),
-        'Выручка': df['Выручка'].sum(),
-        'Закуп_сумма': df['Закуп_сумма'].sum(),
-        'Бензин (доля)': df['Бензин (доля)'].sum(),  # Итог по бензину
-        'Прибыль_Маржа': df['Прибыль_Маржа'].sum()
-    }])
-    df = pd.concat([df, totals_log], ignore_index=True)
-
-    totals_kg = pd.DataFrame([{
-        'Садик': 'ИТОГО:',
-        'Кол_во_отгрузок': kg_summary['Кол_во_отгрузок'].sum(),
-        'Выручка': kg_summary['Выручка'].sum(),
-        'Закуп_сумма': kg_summary['Закуп_сумма'].sum(),
-        'Бензин (доля)': kg_summary['Бензин (доля)'].sum(),
-        'Прибыль_Маржа': kg_summary['Прибыль_Маржа'].sum()
-    }])
-    kg_summary = pd.concat([kg_summary, totals_kg], ignore_index=True)
-
-    totals_prod = pd.DataFrame([{
-        'Товар': 'ИТОГО:',
-        'Факт': prod_summary['Факт'].sum(),
-        'Выручка': prod_summary['Выручка'].sum(),
-        'Закуп_сумма': prod_summary['Закуп_сумма'].sum(),
-        'Бензин (доля)': prod_summary['Бензин (доля)'].sum(),
-        'Прибыль_Маржа': prod_summary['Прибыль_Маржа'].sum()
-    }])
-    prod_summary = pd.concat([prod_summary, totals_prod], ignore_index=True)
-
-    # --- ЗАПИСЬ В EXCEL ---
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name="Общий лог", index=False)
-        kg_summary.to_excel(writer, sheet_name="Итоги по Садикам", index=False)
-        prod_summary.to_excel(writer, sheet_name="Итоги по Товарам", index=False)
-
-        # Расширяем колонки
-        for sheet_name in writer.sheets:
-            worksheet = writer.sheets[sheet_name]
-            for col in worksheet.columns:
-                max_length = 0
-                column_letter = col[0].column_letter
-                for cell in col:
-                    try:
-                        if cell.value:
-                            max_length = max(max_length, len(str(cell.value)))
-                    except:
-                        pass
-                worksheet.column_dimensions[column_letter].width = max_length + 2
-
-    output.seek(0)
-    file_content = output.getvalue()
-
-    document = BufferedInputFile(
-        file_content,
-        filename=f"Global_Report_{datetime.now().strftime('%d_%m_%Y')}.xlsx"
-    )
-
-    await callback.message.answer_document(
-        document,
-        caption="✅ Глобальный отчет сформирован.\n\n"
-                "В файле 3 листа (с учетом бензина и итогами):\n"
-                "1. Общий лог операций\n"
-                "2. Итоги по каждому садику\n"
-                "3. Итоги по видам товаров"
-    )
+# @router.callback_query(F.data == "adm_stats_export_all:xlsx")
+# async def admin_export_global_excel(callback: types.CallbackQuery, session: AsyncSession):
+#     await callback.answer("⏳ Формирую детальный отчет с итогами...", show_alert=False)
+#
+#     raw_data = await get_all_deliveries_for_export(session)
+#
+#     if not raw_data:
+#         await callback.answer("❌ Нет данных для экспорта", show_alert=True)
+#         return
+#
+#     df = pd.DataFrame(raw_data)
+#     df['Дата'] = pd.to_datetime(df['Дата']).dt.strftime('%d.%m.%Y %H:%M')
+#
+#     # --- УМНЫЙ РАСЧЕТ БЕНЗИНА ---
+#     # 1. Если бензин не указан (None), ставим 0
+#     df['Бензин_Смены'] = df['Бензин_Смены'].fillna(0).astype(float)
+#
+#     # 2. Считаем, сколько всего отгрузок было в каждой смене
+#     shift_counts = df.groupby('shift_id')['shift_id'].transform('count')
+#
+#     # 3. Размазываем бензин поровну на все отгрузки этой смены
+#     df['Бензин (доля)'] = df['Бензин_Смены'] / shift_counts
+#
+#     # 4. Считаем ЧИСТУЮ маржу: Выручка - Закуп - Бензин
+#     df['Прибыль_Маржа'] = df['Выручка'] - df['Закуп_сумма'] - df['Бензин (доля)']
+#
+#     # Удаляем технические колонки (они не нужны бухгалтеру)
+#     df = df.drop(columns=['shift_id', 'Бензин_Смены'])
+#
+#     # --- СВОДНЫЕ ТАБЛИЦЫ ---
+#     kg_summary = df.groupby("Садик").agg({
+#         "Выручка": "sum",
+#         "Закуп_сумма": "sum",
+#         "Бензин (доля)": "sum",  # Добавили бензин
+#         "Прибыль_Маржа": "sum",
+#         "Факт": "count"
+#     }).rename(columns={"Факт": "Кол_во_отгрузок"}).reset_index()
+#
+#     prod_summary = df.groupby("Товар").agg({
+#         "Факт": "sum",
+#         "Выручка": "sum",
+#         "Закуп_сумма": "sum",
+#         "Бензин (доля)": "sum",  # Добавили бензин
+#         "Прибыль_Маржа": "sum"
+#     }).reset_index()
+#
+#     # --- ДОБАВЛЯЕМ СТРОКИ "ИТОГО:" ---
+#     totals_log = pd.DataFrame([{
+#         'Дата': 'ИТОГО:',
+#         'План': df['План'].sum(),
+#         'Факт': df['Факт'].sum(),
+#         'Выручка': df['Выручка'].sum(),
+#         'Закуп_сумма': df['Закуп_сумма'].sum(),
+#         'Бензин (доля)': df['Бензин (доля)'].sum(),  # Итог по бензину
+#         'Прибыль_Маржа': df['Прибыль_Маржа'].sum()
+#     }])
+#     df = pd.concat([df, totals_log], ignore_index=True)
+#
+#     totals_kg = pd.DataFrame([{
+#         'Садик': 'ИТОГО:',
+#         'Кол_во_отгрузок': kg_summary['Кол_во_отгрузок'].sum(),
+#         'Выручка': kg_summary['Выручка'].sum(),
+#         'Закуп_сумма': kg_summary['Закуп_сумма'].sum(),
+#         'Бензин (доля)': kg_summary['Бензин (доля)'].sum(),
+#         'Прибыль_Маржа': kg_summary['Прибыль_Маржа'].sum()
+#     }])
+#     kg_summary = pd.concat([kg_summary, totals_kg], ignore_index=True)
+#
+#     totals_prod = pd.DataFrame([{
+#         'Товар': 'ИТОГО:',
+#         'Факт': prod_summary['Факт'].sum(),
+#         'Выручка': prod_summary['Выручка'].sum(),
+#         'Закуп_сумма': prod_summary['Закуп_сумма'].sum(),
+#         'Бензин (доля)': prod_summary['Бензин (доля)'].sum(),
+#         'Прибыль_Маржа': prod_summary['Прибыль_Маржа'].sum()
+#     }])
+#     prod_summary = pd.concat([prod_summary, totals_prod], ignore_index=True)
+#
+#     # --- ЗАПИСЬ В EXCEL ---
+#     output = BytesIO()
+#     with pd.ExcelWriter(output, engine='openpyxl') as writer:
+#         df.to_excel(writer, sheet_name="Общий лог", index=False)
+#         kg_summary.to_excel(writer, sheet_name="Итоги по Садикам", index=False)
+#         prod_summary.to_excel(writer, sheet_name="Итоги по Товарам", index=False)
+#
+#         # Расширяем колонки
+#         for sheet_name in writer.sheets:
+#             worksheet = writer.sheets[sheet_name]
+#             for col in worksheet.columns:
+#                 max_length = 0
+#                 column_letter = col[0].column_letter
+#                 for cell in col:
+#                     try:
+#                         if cell.value:
+#                             max_length = max(max_length, len(str(cell.value)))
+#                     except:
+#                         pass
+#                 worksheet.column_dimensions[column_letter].width = max_length + 2
+#
+#     output.seek(0)
+#     file_content = output.getvalue()
+#
+#     document = BufferedInputFile(
+#         file_content,
+#         filename=f"Global_Report_{datetime.now().strftime('%d_%m_%Y')}.xlsx"
+#     )
+#
+#     await callback.message.answer_document(
+#         document,
+#         caption="✅ Глобальный отчет сформирован.\n\n"
+#                 "В файле 3 листа (с учетом бензина и итогами):\n"
+#                 "1. Общий лог операций\n"
+#                 "2. Итоги по каждому садику\n"
+#                 "3. Итоги по видам товаров"
+#     )
 
 
 @router.message(AdminStatsState.waiting_custom_period, F.text)
@@ -1295,3 +1297,287 @@ async def admin_process_custom_dates(message: types.Message, state: FSMContext, 
     # Отправляем сообщение как обычный ответ на текст (через message.answer)
     from keyboards.inline import get_dashboard_kb
     await message.answer(report_text, reply_markup=get_dashboard_kb(period_code), parse_mode="Markdown")
+
+
+# --- 1. УМНЫЙ ПАРСЕР ДАТ ---
+def parse_dates_from_period(period: str):
+    now = datetime.now()
+    # Строго обнуляем микросекунды, чтобы не было смещений
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    if period == "today":
+        return today_start, today_end
+
+    elif period == "yesterday":
+        yesterday_start = today_start - timedelta(days=1)
+        yesterday_end = yesterday_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return yesterday_start, yesterday_end
+
+    elif period == "month":
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return month_start, today_end
+
+    elif "-" in period:
+        try:
+            start_str, end_str = period.split("-")
+            start = datetime.strptime(start_str, "%Y%m%d").replace(hour=0, minute=0, second=0, microsecond=0)
+            end = datetime.strptime(end_str, "%Y%m%d").replace(hour=23, minute=59, second=59, microsecond=999999)
+            return start, end
+        except:
+            return today_start, today_end
+
+    return today_start, today_end
+
+
+# --- ЭКСПОРТ EXCEL ЗА ПЕРИОД ---
+# @router.callback_query(F.data.startswith("adm_stats_dl_xlsx:"))
+# async def admin_export_period_xlsx(callback: types.CallbackQuery, session: AsyncSession):
+#     period = callback.data.split(":")[1]
+#     start, end = parse_dates_from_period(period)
+#
+#     await callback.answer("Генерирую Excel...")
+#
+#     # Используем твою логику из Глобального отчета, но с фильтром по датам
+#     # (Здесь нужно вызвать get_all_deliveries_for_export, но добавить фильтр start/end)
+#     # Для краткости: логика идентична глобальному, просто в SQL запросе добавляешь WHERE по датам
+#     pass
+
+# --- 2. ГЕНЕРАТОР EXCEL ---
+@router.callback_query(F.data.startswith("adm_stats_dl_xlsx:"))
+@router.callback_query(F.data == "adm_stats_export_all:xlsx")
+async def admin_export_universal_excel(callback: types.CallbackQuery, session: AsyncSession):
+    await callback.answer("⏳ Формирую детальный отчет... Это займет пару секунд.", show_alert=False)
+
+    if "dl_xlsx" in callback.data:
+        period = callback.data.split(":")[1]
+        start_date, end_date = parse_dates_from_period(period)
+        if start_date.date() == end_date.date():
+            filename_prefix = f"Report_{start_date.strftime('%d%m')}"
+        else:
+            filename_prefix = f"Report_{start_date.strftime('%d%m')}-{end_date.strftime('%d%m')}"
+    else:
+        start_date, end_date = None, None
+        filename_prefix = "Global_Report"
+
+    raw_data = await get_all_deliveries_for_export(session, start_date, end_date)
+
+    if not raw_data:
+        await callback.answer("❌ За этот период нет ни одной отгрузки.", show_alert=True)
+        return
+
+    df = pd.DataFrame(raw_data)
+    df['Дата'] = pd.to_datetime(df['Дата']).dt.strftime('%d.%m.%Y %H:%M')
+    df['Бензин_Смены'] = df['Бензин_Смены'].fillna(0).astype(float)
+
+    shift_counts = df.groupby('shift_id')['shift_id'].transform('count')
+    df['Бензин (доля)'] = df['Бензин_Смены'] / shift_counts
+    df['Прибыль_Маржа'] = df['Выручка'] - df['Закуп_сумма'] - df['Бензин (доля)']
+    df = df.drop(columns=['shift_id', 'Бензин_Смены'])
+
+    kg_summary = df.groupby("Садик").agg({
+        "Выручка": "sum", "Закуп_сумма": "sum", "Бензин (доля)": "sum",
+        "Прибыль_Маржа": "sum", "Факт": "count"
+    }).rename(columns={"Факт": "Кол_во_отгрузок"}).reset_index()
+
+    prod_summary = df.groupby("Товар").agg({
+        "Факт": "sum", "Выручка": "sum", "Закуп_сумма": "sum",
+        "Бензин (доля)": "sum", "Прибыль_Маржа": "sum"
+    }).reset_index()
+
+    df = pd.concat([df, pd.DataFrame([{
+        'Дата': 'ИТОГО:', 'План': df['План'].sum(), 'Факт': df['Факт'].sum(),
+        'Выручка': df['Выручка'].sum(), 'Закуп_сумма': df['Закуп_сумма'].sum(),
+        'Бензин (доля)': df['Бензин (доля)'].sum(), 'Прибыль_Маржа': df['Прибыль_Маржа'].sum()
+    }])], ignore_index=True)
+
+    kg_summary = pd.concat([kg_summary, pd.DataFrame([{
+        'Садик': 'ИТОГО:', 'Кол_во_отгрузок': kg_summary['Кол_во_отгрузок'].sum(),
+        'Выручка': kg_summary['Выручка'].sum(), 'Закуп_сумма': kg_summary['Закуп_сумма'].sum(),
+        'Бензин (доля)': kg_summary['Бензин (доля)'].sum(), 'Прибыль_Маржа': kg_summary['Прибыль_Маржа'].sum()
+    }])], ignore_index=True)
+
+    prod_summary = pd.concat([prod_summary, pd.DataFrame([{
+        'Товар': 'ИТОГО:', 'Факт': prod_summary['Факт'].sum(),
+        'Выручка': prod_summary['Выручка'].sum(), 'Закуп_сумма': prod_summary['Закуп_сумма'].sum(),
+        'Бензин (доля)': prod_summary['Бензин (доля)'].sum(), 'Прибыль_Маржа': prod_summary['Прибыль_Маржа'].sum()
+    }])], ignore_index=True)
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name="Общий лог", index=False)
+        kg_summary.to_excel(writer, sheet_name="Итоги по Садикам", index=False)
+        prod_summary.to_excel(writer, sheet_name="Итоги по Товарам", index=False)
+
+        for sheet_name in writer.sheets:
+            worksheet = writer.sheets[sheet_name]
+            for col in worksheet.columns:
+                max_length = 0
+                for cell in col:
+                    if cell.value:
+                        max_length = max(max_length, len(str(cell.value)))
+                worksheet.column_dimensions[col[0].column_letter].width = max_length + 2
+
+    output.seek(0)
+    document = BufferedInputFile(output.getvalue(), filename=f"{filename_prefix}.xlsx")
+
+    await callback.message.answer_document(document, caption="✅ Excel-отчет успешно сформирован.")
+
+
+# --- 3. ГЕНЕРАТОР PDF ---
+@router.callback_query(F.data.startswith("adm_stats_dl_pdf:"))
+@router.callback_query(F.data == "adm_stats_export_all:pdf")
+async def admin_export_universal_pdf(callback: types.CallbackQuery, session: AsyncSession):
+    await callback.answer("⏳ Формирую детальный PDF (3 раздела)...", show_alert=False)
+
+    if "dl_pdf" in callback.data:
+        period = callback.data.split(":")[1]
+        start_date, end_date = parse_dates_from_period(period)
+
+        if start_date.date() == end_date.date():
+            title = f"ОТЧЕТ ЗА {start_date.strftime('%d.%m.%Y')}"
+            filename_prefix = f"Report_{start_date.strftime('%d%m')}"
+        else:
+            title = f"ОТЧЕТ ЗА {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}"
+            filename_prefix = f"Report_{start_date.strftime('%d%m')}-{end_date.strftime('%d%m')}"
+    else:
+        start_date, end_date = None, None
+        title = "ГЛОБАЛЬНЫЙ ОТЧЕТ (ВСЕ ВРЕМЯ)"
+        filename_prefix = "Global_Report"
+
+    raw_data = await get_all_deliveries_for_export(session, start_date, end_date)
+    if not raw_data:
+        await callback.answer("❌ За этот период нет данных.", show_alert=True)
+        return
+
+    df = pd.DataFrame(raw_data)
+    df['Дата'] = pd.to_datetime(df['Дата']).dt.strftime('%d.%m %H:%M')
+    df['Бензин_Смены'] = df['Бензин_Смены'].fillna(0).astype(float)
+
+    shift_counts = df.groupby('shift_id')['shift_id'].transform('count')
+    df['Бензин (доля)'] = df['Бензин_Смены'] / shift_counts
+    df['Прибыль_Маржа'] = df['Выручка'] - df['Закуп_сумма'] - df['Бензин (доля)']
+    df = df.drop(columns=['shift_id', 'Бензин_Смены'])
+
+    kg_summary = df.groupby("Садик").agg({
+        "Выручка": "sum", "Закуп_сумма": "sum", "Бензин (доля)": "sum",
+        "Прибыль_Маржа": "sum", "Факт": "count"
+    }).rename(columns={"Факт": "Кол_во"}).reset_index()
+
+    prod_summary = df.groupby("Товар").agg({
+        "Факт": "sum", "Выручка": "sum", "Закуп_сумма": "sum",
+        "Бензин (доля)": "sum", "Прибыль_Маржа": "sum"
+    }).reset_index()
+
+    df = pd.concat([df, pd.DataFrame([{
+        'Дата': 'ИТОГО:', 'План': df['План'].sum(), 'Факт': df['Факт'].sum(),
+        'Выручка': df['Выручка'].sum(), 'Закуп_сумма': df['Закуп_сумма'].sum(),
+        'Бензин (доля)': df['Бензин (доля)'].sum(), 'Прибыль_Маржа': df['Прибыль_Маржа'].sum()
+    }])], ignore_index=True)
+
+    kg_summary = pd.concat([kg_summary, pd.DataFrame([{
+        'Садик': 'ИТОГО:', 'Кол_во': kg_summary['Кол_во'].sum(),
+        'Выручка': kg_summary['Выручка'].sum(), 'Закуп_сумма': kg_summary['Закуп_сумма'].sum(),
+        'Бензин (доля)': kg_summary['Бензин (доля)'].sum(), 'Прибыль_Маржа': kg_summary['Прибыль_Маржа'].sum()
+    }])], ignore_index=True)
+
+    prod_summary = pd.concat([prod_summary, pd.DataFrame([{
+        'Товар': 'ИТОГО:', 'Факт': prod_summary['Факт'].sum(),
+        'Выручка': prod_summary['Выручка'].sum(), 'Закуп_сумма': prod_summary['Закуп_сумма'].sum(),
+        'Бензин (доля)': prod_summary['Бензин (доля)'].sum(), 'Прибыль_Маржа': prod_summary['Прибыль_Маржа'].sum()
+    }])], ignore_index=True)
+
+    pdf = FPDF(orientation="L")
+    pdf.add_page()
+
+    font_path = "Fonts/arial.ttf"
+    if not os.path.exists(font_path):
+        await callback.message.answer(f"❌ Шрифт '{font_path}' не найден.")
+        return
+    pdf.add_font('MyArial', '', font_path, uni=True)
+
+    def fmt(val, is_num=True, max_len=15):
+        if pd.isna(val): return ""
+        if is_num:
+            try:
+                return f"{int(float(val)):,}"
+            except:
+                return ""
+        return str(val)[:max_len]
+
+    pdf.set_font('MyArial', '', 14)
+    pdf.cell(0, 10, title + " - ЛИСТ 1 (ОБЩИЙ ЛОГ)", ln=True, align='C')
+    pdf.ln(2)
+
+    pdf.set_font('MyArial', '', 7)
+    headers = [("Дата", 20), ("Водитель", 25), ("Садик", 28), ("Товар", 25),
+               ("Ед", 8), ("План", 10), ("Факт", 10), ("Ц.Сад", 18),
+               ("Ц.Зак", 18), ("Выручка", 22), ("Закуп", 22), ("Бенз", 18), ("Маржа", 24)]
+
+    for h, w in headers:
+        pdf.cell(w, 7, h, 1, align='C')
+    pdf.ln()
+
+    for _, row in df.iterrows():
+        if pdf.get_y() > 185:
+            pdf.add_page()
+            for h, w in headers: pdf.cell(w, 7, h, 1, align='C')
+            pdf.ln()
+
+        pdf.cell(20, 6, fmt(row.get('Дата'), False, 11), 1)
+        pdf.cell(25, 6, fmt(row.get('Водитель'), False), 1)
+        pdf.cell(28, 6, fmt(row.get('Садик'), False), 1)
+        pdf.cell(25, 6, fmt(row.get('Товар'), False), 1)
+        pdf.cell(8, 6, fmt(row.get('Ед_изм'), False), 1, align='C')
+        pdf.cell(10, 6, fmt(row.get('План'), False), 1, align='C')
+        pdf.cell(10, 6, fmt(row.get('Факт'), False), 1, align='C')
+        pdf.cell(18, 6, fmt(row.get('Цена_Садик')), 1, align='R')
+        pdf.cell(18, 6, fmt(row.get('Цена_Закуп')), 1, align='R')
+        pdf.cell(22, 6, fmt(row.get('Выручка')), 1, align='R')
+        pdf.cell(22, 6, fmt(row.get('Закуп_сумма')), 1, align='R')
+        pdf.cell(18, 6, fmt(row.get('Бензин (доля)')), 1, align='R')
+        pdf.cell(24, 6, fmt(row.get('Прибыль_Маржа')), 1, align='R')
+        pdf.ln()
+
+    pdf.add_page()
+    pdf.set_font('MyArial', '', 14)
+    pdf.cell(0, 10, "ЛИСТ 2: ИТОГИ ПО САДИКАМ", ln=True, align='C')
+    pdf.ln(5)
+
+    pdf.set_font('MyArial', '', 10)
+    kg_headers = [("Садик", 60), ("Отгрузки", 25), ("Выручка", 40), ("Закуп", 40), ("Бензин", 35), ("Маржа", 40)]
+    for h, w in kg_headers: pdf.cell(w, 8, h, 1, align='C')
+    pdf.ln()
+
+    for _, row in kg_summary.iterrows():
+        pdf.cell(60, 8, fmt(row.get('Садик'), False, 30), 1)
+        pdf.cell(25, 8, fmt(row.get('Кол_во'), False), 1, align='C')
+        pdf.cell(40, 8, fmt(row.get('Выручка')), 1, align='R')
+        pdf.cell(40, 8, fmt(row.get('Закуп_сумма')), 1, align='R')
+        pdf.cell(35, 8, fmt(row.get('Бензин (доля)')), 1, align='R')
+        pdf.cell(40, 8, fmt(row.get('Прибыль_Маржа')), 1, align='R')
+        pdf.ln()
+
+    pdf.add_page()
+    pdf.set_font('MyArial', '', 14)
+    pdf.cell(0, 10, "ЛИСТ 3: ИТОГИ ПО ТОВАРАМ", ln=True, align='C')
+    pdf.ln(5)
+
+    pdf.set_font('MyArial', '', 10)
+    prod_headers = [("Товар", 60), ("Факт", 25), ("Выручка", 40), ("Закуп", 40), ("Бензин", 35), ("Маржа", 40)]
+    for h, w in prod_headers: pdf.cell(w, 8, h, 1, align='C')
+    pdf.ln()
+
+    for _, row in prod_summary.iterrows():
+        pdf.cell(60, 8, fmt(row.get('Товар'), False, 30), 1)
+        pdf.cell(25, 8, fmt(row.get('Факт'), False), 1, align='C')
+        pdf.cell(40, 8, fmt(row.get('Выручка')), 1, align='R')
+        pdf.cell(40, 8, fmt(row.get('Закуп_сумма')), 1, align='R')
+        pdf.cell(35, 8, fmt(row.get('Бензин (доля)')), 1, align='R')
+        pdf.cell(40, 8, fmt(row.get('Прибыль_Маржа')), 1, align='R')
+        pdf.ln()
+
+    pdf_output = pdf.output()
+    document = BufferedInputFile(pdf_output, filename=f"{filename_prefix}.pdf")
+
+    await callback.message.answer_document(document, caption="✅ Детальный PDF-отчет сформирован (3 листа).")

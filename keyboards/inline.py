@@ -471,12 +471,16 @@ def get_analytics_period_kb():
 # --- АНАЛИТИКА: ДАШБОРД (МЕНЮ ВНУТРИ ПЕРИОДА) ---
 def get_dashboard_kb(period: str):
     builder = InlineKeyboardBuilder()
-    builder.button(text="👥 Детализация по водителям", callback_data=f"adm_stats_drivers:{period}")
-    builder.button(text="📦 Топ товаров", callback_data=f"adm_stats_products:{period}")
+
+    # Детализация остается только для месячного отчета
+    if period == "month":
+        builder.button(text="👥 Детализация по водителям", callback_data=f"adm_stats_drivers:{period}")
+        builder.button(text="📦 Топ товаров", callback_data=f"adm_stats_products:{period}")
+
     builder.button(text="📗 Скачать Excel", callback_data=f"adm_stats_dl_xlsx:{period}")
     builder.button(text="📕 Скачать PDF", callback_data=f"adm_stats_dl_pdf:{period}")
     builder.button(text="⬅️ Назад к выбору периода", callback_data="admin_stats")
-    builder.adjust(1, 1, 2, 1)
+    builder.adjust(1)
     return builder.as_markup()
 
 

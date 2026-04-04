@@ -299,9 +299,9 @@ async def get_drivers_performance(session: AsyncSession, start_date: datetime, e
     # Сортируем: самые прибыльные вверху
     return sorted(drivers_stats, key=lambda x: x['profit'], reverse=True)
 
-async def get_all_deliveries_for_export(session: AsyncSession):
+async def get_all_deliveries_for_export(session: AsyncSession, start_date: datetime = None, end_date: datetime = None):
     query = select(
-        Shift.id.label("shift_id"),                 # Нужно для расчетов доли
+        Shift.id.label("shift_id"),
         Shift.opened_at.label("Дата"),
         User.full_name.label("Водитель"),
         Kindergarten.name.label("Садик"),
@@ -311,12 +311,38 @@ async def get_all_deliveries_for_export(session: AsyncSession):
         Delivery.weight_fact.label("Факт"),
         Delivery.p_sadik_fact.label("Цена_Садик"),
         Delivery.p_zakup_fact.label("Цена_Закуп"),
-        Shift.fuel_expense.label("Бензин_Смены"),   # Тянем бензин из базы
+        Shift.fuel_expense.label("Бензин_Смены"),
         (Delivery.weight_fact * Delivery.p_sadik_fact).label("Выручка"),
         (Delivery.weight_fact * Delivery.p_zakup_fact).label("Закуп_сумма")
     ).join(Delivery.shift).join(Delivery.product).join(Delivery.kindergarten).join(Shift.driver).where(
         Shift.is_closed == True
-    ).order_by(Shift.opened_at.desc())
+    )
+
+    # Если передали даты - фильтруем
+    if start_date and end_date:
+        query = query.where(Shift.opened_at >= start_date, Shift.opened_at <= end_date)
+
+    query = query.order_by(Shift.opened_at.desc())
 
     result = await session.execute(query)
     return [dict(row._mapping) for row in result.all()]
+
+
+async def get_deliveries_by_period(session: AsyncSession, start_date: datetime, end_date: datetime):
+    query = select(
+        Shift.opened_at.label("date"),
+        User.full_name.label("driver"),
+        Kindergarten.name.label("kg"),
+        Product.name.label("product"),
+        Product.unit.label("unit"),
+        Delivery.weight_fact.label("weight"),
+        Delivery.p_sadik_fact.label("price"),
+        (Delivery.weight_fact * Delivery.p_sadik_fact).label("total")
+    ).join(Delivery.shift).join(Delivery.product).join(Delivery.kindergarten).join(Shift.driver).where(
+        Shift.opened_at >= start_date,
+        Shift.opened_at <= end_date,
+        Shift.is_closed == True
+    ).order_by(Shift.opened_at.asc())
+
+    result = await session.execute(query)
+    return result.all()
