@@ -31,6 +31,7 @@ class AdminEdit(StatesGroup):
     waiting_p_sadik_edit = State()
     waiting_p_zakup_edit = State()
     waiting_name_edit = State()
+    waiting_shift_fuel = State()
 
 # --- САДИКИ ---
 class KGState(StatesGroup):

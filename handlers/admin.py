@@ -1,20 +1,27 @@
+from datetime import datetime, timedelta
+
+from aiogram.dispatcher.event.bases import SkipHandler
+
 from aiogram import Router, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 from aiogram.types import Message
-from database.requests import get_user_shifts, delete_shift_full, get_shift_by_id, get_shift_deliveries, unclose_shift, delete_kg_from_active_shift
+from database.requests import get_user_shifts, update_shift_date, get_user, delete_shift_full, get_shift_by_id, get_shift_deliveries, unclose_shift, delete_kg_from_active_shift
 
 # Импортируем твои модели, стейты и клавиатуры
 from database.models import User, Product, Kindergarten, Shift, Delivery
-from utils.states import AdminState, AdminEdit, KGState
+from utils.states import AdminState, AdminEdit, KGState, DeliveryState
 from keyboards.inline import (admin_main_kb, get_products_list_kb, get_product_card_kb,
                               get_cancel_kb, get_units_kb, get_kg_list_kb,
                               get_kg_card_kb, get_user_card_kb, get_users_list_kb,
                               get_admin_user_history_kb, get_admin_report_tools_kb,
-                              get_admin_edit_menu_kb, get_admin_manage_kgs_kb)
+                              get_admin_edit_menu_kb, get_admin_manage_kgs_kb,
+                              get_admin_edit_loop_kb, get_kg_paging_kb, get_products_paging_kb)
+
 from keyboards.reply import main_menu_kb
 
 router = Router()
@@ -627,23 +634,33 @@ async def admin_stats_view(callback: types.CallbackQuery, session: AsyncSession)
     await callback.answer()
 
 
-# Пример того, как теперь выглядит хендлер истории в admin.py
+# 1. Исправленный список истории
 @router.callback_query(F.data.startswith("adm_history:"))
 @router.callback_query(F.data.startswith("adm_rep_page:"))
-async def admin_show_user_history(callback: types.CallbackQuery, session: AsyncSession):
-    parts = callback.data.split(":")
-    user_id = int(parts[1])
-    page = int(parts[2]) if len(parts) > 2 else 0
+async def admin_show_user_history(callback: types.CallbackQuery, session: AsyncSession, user_id_override: int = None):
+    # Если мы передали ID вручную (после удаления), берем его
+    if user_id_override:
+        user_id = user_id_override
+        page = 0
+    else:
+        # Иначе парсим из нажатой кнопки как обычно
+        parts = callback.data.split(":")
+        user_id = int(parts[1])
+        page = int(parts[2]) if len(parts) > 2 else 0
 
     limit = 5
     offset = page * limit
     shifts = await get_user_shifts(session, user_id, limit, offset)
 
+    # Если отчетов нет (например, удалили единственный отчет)
     if not shifts and page == 0:
-        await callback.answer("У этого водителя нет отчетов.", show_alert=True)
+        await callback.message.edit_text(
+            "У этого водителя больше нет отчетов.",
+            # Возвращаем кнопку в карточку юзера
+            reply_markup=get_user_card_kb(user_id, False, False)
+        )
         return
 
-    # ВЫЗЫВАЕМ ЧИСТУЮ ФУНКЦИЮ ИЗ inline.py
     await callback.message.edit_text(
         f"📂 **История отчетов (стр. {page + 1})**",
         reply_markup=get_admin_user_history_kb(shifts, user_id, page),
@@ -651,26 +668,24 @@ async def admin_show_user_history(callback: types.CallbackQuery, session: AsyncS
     )
 
 
-# 1. Просмотр деталей конкретного отчета из истории
-@router.callback_query(F.data.startswith("adm_view_rep:"))
-async def admin_view_single_report(callback: types.CallbackQuery, session: AsyncSession):
-    shift_id = int(callback.data.split(":")[1])
+# handlers/admin.py
 
-    # 1. Загружаем смену СРАЗУ с водителем (используем select вместо session.get)
+@router.callback_query(F.data.startswith("adm_view_rep:"))
+async def admin_view_single_report(callback: types.CallbackQuery, session: AsyncSession, shift_id_override: int = None):
+    if shift_id_override:
+        shift_id = shift_id_override
+    else:
+        shift_id = int(callback.data.split(":")[1])
+
     result_shift = await session.execute(
-        select(Shift)
-        .where(Shift.id == shift_id)
-        .options(selectinload(Shift.driver))  # Магия здесь: подгружаем водителя
+        select(Shift).where(Shift.id == shift_id).options(selectinload(Shift.driver))
     )
     shift = result_shift.scalar_one_or_none()
 
-    # 2. Загружаем отгрузки СРАЗУ с товарами и садиками
     result_deliveries = await session.execute(
-        select(Delivery)
-        .where(Delivery.shift_id == shift_id)
-        .options(
-            selectinload(Delivery.product),  # Подгружаем товар
-            selectinload(Delivery.kindergarten)  # Подгружаем садик
+        select(Delivery).where(Delivery.shift_id == shift_id).options(
+            selectinload(Delivery.product),
+            selectinload(Delivery.kindergarten)
         )
     )
     deliveries = result_deliveries.scalars().all()
@@ -679,12 +694,13 @@ async def admin_view_single_report(callback: types.CallbackQuery, session: Async
         await callback.answer("⚠️ Смена не найдена.", show_alert=True)
         return
 
-    # Теперь shift.driver.full_name сработает, потому что данные уже в памяти!
     report_text = f"📋 **Детальный отчет за {shift.opened_at.strftime('%d.%m.%Y')}**\n"
     report_text += f"👤 Водитель: {shift.driver.full_name if shift.driver else 'Удален'}\n"
     report_text += "───────────────────\n"
 
     total_sum = 0
+    total_cost = 0 # Считаем себестоимость (закуп)
+
     if not deliveries:
         report_text += "_Отгрузок не зафиксировано_\n"
     else:
@@ -692,15 +708,19 @@ async def admin_view_single_report(callback: types.CallbackQuery, session: Async
             report_text += f"🏫 {d.kindergarten.name}\n"
             report_text += f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} = {d.total_price_sadik:,} сум\n"
             total_sum += d.total_price_sadik
+            total_cost += d.total_cost_zakup
 
     fuel = shift.fuel_expense or 0
-    final_amount = total_sum - fuel
+    final_amount = total_sum - fuel # Сколько водитель должен сдать налички
+    net_profit = total_sum - total_cost - fuel # Твоя чистая прибыль
 
     report_text += "───────────────────\n"
     report_text += f"⛽ Бензин: **{fuel:,} сум**\n"
     report_text += f"💰 ОБЩАЯ ВЫРУЧКА: **{total_sum:,} сум**\n"
-    report_text += f"💵 **ИТОГО К ВЫДАЧЕ: {final_amount:,} сум**"
+    report_text += f"💵 **КАССА (СДАЕТ ВОДИТЕЛЬ): {final_amount:,} сум**\n"
+    report_text += f"📈 **ЧИСТАЯ ПРИБЫЛЬ: {net_profit:,} сум**"
 
+    from keyboards.inline import get_admin_report_tools_kb
     await callback.message.edit_text(
         report_text,
         reply_markup=get_admin_report_tools_kb(shift.id, shift.user_id),
@@ -709,86 +729,263 @@ async def admin_view_single_report(callback: types.CallbackQuery, session: Async
     await callback.answer()
 
 
-# 2. Удаление отчета (если админ нажал "Удалить")
+# 2. Исправленное удаление
 @router.callback_query(F.data.startswith("adm_del_rep:"))
 async def admin_delete_report(callback: types.CallbackQuery, session: AsyncSession):
     shift_id = int(callback.data.split(":")[1])
 
-    # Сначала узнаем ID юзера, чтобы вернуться в его историю после удаления
+    # Ищем смену, чтобы узнать кому она принадлежала
     shift = await session.get(Shift, shift_id)
-    user_id = shift.user_id if shift else None
+    if not shift:
+        await callback.answer("Отчет уже удален.")
+        return
 
-    # Удаляем (используем твой готовый метод из requests)
+    user_id = shift.user_id
+
+    # Удаляем
     await delete_shift_full(session, shift_id)
     await callback.answer("🚨 Отчет полностью удален!", show_alert=True)
 
-    # Возвращаемся к списку отчетов этого водителя
-    if user_id:
-        # Имитируем нажатие на "История", чтобы обновить список
-        callback.data = f"adm_history:{user_id}"
-        await admin_show_user_history(callback, session)
+    # ВМЕСТО callback.data = ... (что вызывало ошибку)
+    # Вызываем функцию напрямую и передаем ID водителя
+    await admin_show_user_history(callback, session, user_id_override=user_id)
 
 
 # Вставь это в handlers/admin.py
 
-# 1. Вход в режим редактирования (исправляем твой прошлый хендлер)
+# 1. Вход в редактирование (из карточки отчета)
 @router.callback_query(F.data.startswith("adm_edit_rep:"))
-async def admin_edit_report_start(callback: types.CallbackQuery, session: AsyncSession):
+async def admin_edit_report_start(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
     shift_id = int(callback.data.split(":")[1])
 
-    # Открываем смену в базе
-    await unclose_shift(session, shift_id)
+    await unclose_shift(session, shift_id)  # Открываем смену
+    await state.clear()
+    await state.update_data(shift_id=shift_id)  # Якорим ID смены в стейте
 
     await callback.message.edit_text(
-        "🛠 **РЕЖИМ РЕДАКТИРОВАНИЯ (АДМИН)**\nВыберите действие:",
-        reply_markup=get_admin_edit_menu_kb(shift_id),
+        "🛠 **РЕЖИМ РЕДАКТИРОВАНИЯ (АДМИН)**\nЧто вы хотите сделать?",
+        reply_markup=get_admin_edit_loop_kb(shift_id), # Исправил название функции
         parse_mode="Markdown"
     )
 
 
-# 2. Просмотр садиков для удаления
+# 2. Добавление нового садика в чужой отчет
+@router.callback_query(F.data.startswith("adm_add_kg_start:"))
+async def admin_add_kg_start(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    shift_id = int(callback.data.split(":")[1])
+    await state.update_data(shift_id=shift_id)
+
+    from database.requests import get_active_kindergartens
+    kgs = await get_active_kindergartens(session)
+
+    await state.set_state(DeliveryState.object_name) # Магия: админ теперь в стейте водителя
+
+    await callback.message.edit_text(
+        "🏫 **Добавление садика в отчет**\nВыберите объект:",
+        reply_markup=get_kg_paging_kb(kgs, page=0),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+# 3. Список садиков для удаления
 @router.callback_query(F.data.startswith("adm_manage_shift:"))
 async def admin_manage_shift_kgs(callback: types.CallbackQuery, session: AsyncSession):
     shift_id = int(callback.data.split(":")[1])
-
-    # Получаем отгрузки этой смены
     deliveries = await get_shift_deliveries(session, shift_id)
 
     if not deliveries:
         await callback.answer("В этой смене пусто.", show_alert=True)
         return
 
-    # Собираем уникальные садики
     kgs = {d.kindergarten.id: d.kindergarten.name for d in deliveries}
 
     await callback.message.edit_text(
-        "Вы можете полностью удалить садик из этого отчета:",
+        "🔍 **Управление садиками:**\nВыберите садик для ПОЛНОГО удаления из отчета:",
         reply_markup=get_admin_manage_kgs_kb(kgs, shift_id)
     )
 
 
-# 3. Само удаление садика админом
+# 4. Удаление (Фикс распаковки)
 @router.callback_query(F.data.startswith("adm_del_kg:"))
 async def admin_delete_kg_from_shift(callback: types.CallbackQuery, session: AsyncSession):
-    # Исправленная строка (теперь 3 части: префикс, id смены, id садика)
     data_parts = callback.data.split(":")
     shift_id = int(data_parts[1])
     kg_id = int(data_parts[2])
 
-    # Вызываем твой метод удаления
     await delete_kg_from_active_shift(session, shift_id, kg_id)
-    await callback.answer("✅ Садик удален из отчета", show_alert=True)
+    await callback.answer("✅ Садик удален", show_alert=True)
 
-    # Обновляем меню выбора садиков
     await admin_manage_shift_kgs(callback, session)
 
 
-# 4. Завершение правок
+# 5. Завершение (Фикс Frozen Instance)
 @router.callback_query(F.data.startswith("adm_finish_edit:"))
-async def admin_finish_edit(callback: types.CallbackQuery, session: AsyncSession):
+async def admin_finish_edit(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
     shift_id = int(callback.data.split(":")[1])
 
-    # Закрываем смену обратно (если нужно)
-    # Можно просто вызвать просмотр отчета
-    callback.data = f"adm_view_rep:{shift_id}"
-    await admin_view_single_report(callback, session)
+    await session.execute(
+        update(Shift).where(Shift.id == shift_id).values(is_closed=True)
+    )
+    await session.commit()
+    await state.clear()
+
+    await callback.answer("✅ Правки сохранены")
+
+    # Прямой вызов функции просмотра с override
+    await admin_view_single_report(callback, session, shift_id_override=shift_id)
+
+
+# 1. Если админ хочет добавить ЕЩЕ товар в тот же садик
+@router.callback_query(F.data.startswith("adm_more_prod_same_kg:"))
+async def admin_add_more_product_same_kg(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    # Мы просто отправляем его на выбор товара, не меняя садик в стейте
+    from database.requests import get_all_products
+    products = await get_all_products(session)
+
+    await state.set_state(DeliveryState.choosing_product)
+    await callback.message.edit_text(
+        "Выберите следующий товар для этого садика:",
+        reply_markup=get_products_paging_kb(products, page=0)
+    )
+
+
+# 2. Если админ закончил с этим садиком и хочет вернуться в ГЛАВНОЕ МЕНЮ правки
+@router.callback_query(F.data.startswith("adm_finish_this_kg:"))
+async def admin_finish_kg_and_return(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    shift_id = int(callback.data.split(":")[1])
+
+    # Можно тут вывести мини-итог по садику, как у водителя
+    # Но главное — вернуть его в главное меню админ-правки
+    await callback.message.edit_text(
+        "✅ Садик записан. Что делаем дальше?",
+        reply_markup=get_admin_edit_loop_kb(shift_id)
+    )
+
+
+# 1. Перехват кнопки "Завершить этот садик"
+@router.callback_query(F.data == "finish_this_kg")
+async def intercept_finish_kg(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    user = await get_user(session, callback.from_user.id)
+
+    if not user.is_admin:
+        raise SkipHandler()  # 🪄 ВОТ МАГИЯ! Передаем сигнал дальше в delivery.py
+
+    # Если нажал админ — возвращаем его в админку
+    data = await state.get_data()
+    shift_id = data.get("shift_id")
+    await callback.message.edit_text("Садик завершен. Возвращаюсь в меню правки...",
+                                     reply_markup=get_admin_edit_loop_kb(shift_id))
+
+
+# 2. Перехват кнопки "Завершить смену"
+@router.callback_query(F.data == "go_to_close_shift")
+async def intercept_close_shift(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    user = await get_user(session, callback.from_user.id)
+
+    if not user.is_admin:
+        raise SkipHandler()  # 🪄 Пропускаем водителя в delivery.py
+
+    # Если админ нажал "Завершить смену" в процессе правки
+    data = await state.get_data()
+    shift_id = data.get("shift_id")
+
+    await session.execute(update(Shift).where(Shift.id == shift_id).values(is_closed=True))
+    await session.commit()
+    await state.clear()
+
+    await callback.answer("✅ Правки сохранены")
+    await admin_view_single_report(callback, session, shift_id_override=shift_id)
+
+
+@router.callback_query(F.data.startswith("adm_change_date:"))
+async def admin_change_date_request(callback: types.CallbackQuery):
+    shift_id = int(callback.data.split(":")[1])
+
+    builder = InlineKeyboardBuilder()
+    today = datetime.now().strftime("%d.%m")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%d.%m")
+
+    builder.button(text=f"📅 Сегодня ({today})", callback_data=f"adm_apply_date:today:{shift_id}")
+    builder.button(text=f"📅 Вчера ({yesterday})", callback_data=f"adm_apply_date:yesterday:{shift_id}")
+    builder.button(text="⬅️ Назад", callback_data=f"adm_edit_rep:{shift_id}")  # Возврат в меню правки
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        "Выберите новую дату для этой смены:",
+        reply_markup=builder.as_markup(),
+        parse_mode="Markdown"
+    )
+
+
+@router.callback_query(F.data.startswith("adm_apply_date:"))
+async def admin_apply_date_fix(callback: types.CallbackQuery, session: AsyncSession, state: FSMContext):
+    parts = callback.data.split(":")
+    date_type = parts[1]
+    shift_id = int(parts[2])
+
+    now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    new_date = now if date_type == "today" else now - timedelta(days=1)
+
+    # Обновляем дату
+    await update_shift_date(session, shift_id, new_date)
+    await callback.answer(f"📅 Дата изменена на {new_date.strftime('%d.%m')}", show_alert=True)
+
+    # ВАЖНО: возвращаем админа в меню ПРАВОК, а не просто в просмотр
+    # Чтобы он видел кнопку "Завершить правки"
+    await callback.message.edit_text(
+        f"✅ Дата изменена на **{new_date.strftime('%d.%m.%Y')}**.\n\nЧто делаем дальше?",
+        reply_markup=get_admin_edit_loop_kb(shift_id),
+        parse_mode="Markdown"
+    )
+
+# 1. Админ нажал кнопку "Изменить бензин"
+@router.callback_query(F.data.startswith("adm_change_fuel:"))
+async def admin_change_fuel_start(callback: types.CallbackQuery, state: FSMContext):
+    shift_id = int(callback.data.split(":")[1])
+
+    # Сохраняем ID смены и переводим в режим ожидания ввода
+    await state.update_data(shift_id=shift_id)
+    await state.set_state(AdminEdit.waiting_shift_fuel)
+
+    # Кнопка отмены, если админ передумал
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data=f"adm_edit_rep:{shift_id}")
+
+    await callback.message.edit_text(
+        "⛽ **Изменение расхода на бензин**\n\nВведите новую сумму цифрами (например: `50000`):",
+        reply_markup=builder.as_markup(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+# 2. Админ ввел новую сумму бензина
+@router.message(AdminEdit.waiting_shift_fuel)
+async def admin_change_fuel_process(message: types.Message, state: FSMContext, session: AsyncSession):
+    try:
+        # Пробуем перевести текст в число
+        new_fuel = float(message.text.replace(',', '.'))
+    except ValueError:
+        await message.answer("⚠️ Ошибка! Введите сумму только цифрами.")
+        return
+
+    # Достаем ID смены из стейта
+    data = await state.get_data()
+    shift_id = data.get("shift_id")
+
+    # Обновляем в базе
+    await session.execute(
+        update(Shift).where(Shift.id == shift_id).values(fuel_expense=new_fuel)
+    )
+    await session.commit()
+
+    # Выходим из режима ввода (но оставляем shift_id, чтобы админ мог продолжить правки)
+    await state.set_state(None)
+
+    # Сообщаем об успехе и возвращаем кнопки редактирования
+    from keyboards.inline import get_admin_edit_loop_kb
+    await message.answer(
+        f"✅ Расход на бензин обновлен на **{new_fuel:,} сум**.\n\nЧто делаем дальше?",
+        reply_markup=get_admin_edit_loop_kb(shift_id),
+        parse_mode="Markdown"
+    )

@@ -346,8 +346,8 @@ def get_user_card_kb(user_id: int, is_admin: bool, is_blocked: bool):
     else:
         builder.row(InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"adm_user_set:block:{user_id}"))
 
-    builder.row(InlineKeyboardButton(text="⬅️ К списку пользователей", callback_data="admin_drivers"))
     builder.row(InlineKeyboardButton(text="📂 История отчетов", callback_data=f"adm_history:{user_id}"))
+    builder.row(InlineKeyboardButton(text="⬅️ К списку пользователей", callback_data="admin_drivers"))
     return builder.as_markup()
 
 
@@ -381,23 +381,21 @@ def get_admin_user_history_kb(shifts, user_id: int, page: int = 0, limit: int = 
     return builder.as_markup()
 
 
-# Кнопки управления конкретным отчетом для АДМИНА
+# Клавиатура просмотра отчета (инструменты админа)
 def get_admin_report_tools_kb(shift_id: int, user_id: int):
     builder = InlineKeyboardBuilder()
+    # ВАЖНО: callback должен быть adm_edit_rep, а не adm_edit_menu
+    builder.row(
+        InlineKeyboardButton(text="✏️ Редактировать (Добавить/Удалить)", callback_data=f"adm_edit_rep:{shift_id}"))
 
-    # Функционал как у водителя, но с админскими префиксами если нужно,
-    # или используем те же, если логика общая
-    builder.row(InlineKeyboardButton(text="✏️ Редактировать (Открыть смену)", callback_data=f"adm_edit_rep:{shift_id}"))
-    builder.row(InlineKeyboardButton(text="🗑 Удалить отчет полностью", callback_data=f"adm_del_rep:{shift_id}"))
-
-    # Экспорт (можно заюзать твои текущие хендлеры)
     builder.row(
         InlineKeyboardButton(text="📗 Excel", callback_data=f"export_xlsx:{shift_id}"),
         InlineKeyboardButton(text="📄 PDF", callback_data=f"export_pdf:{shift_id}")
     )
 
-    builder.row(InlineKeyboardButton(text="⬅️ Назад к списку дат", callback_data=f"adm_history:{user_id}"))
-
+    builder.row(InlineKeyboardButton(text="🗑 Удалить отчет", callback_data=f"adm_del_rep:{shift_id}"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"adm_history:{user_id}"))
+    builder.adjust(1, 2, 1, 1)
     return builder.as_markup()
 
 
@@ -421,5 +419,32 @@ def get_admin_manage_kgs_kb(kgs_dict, shift_id: int):
         builder.button(text=f"❌ Удалить {kg_name}", callback_data=f"adm_del_kg:{shift_id}:{kg_id}")
 
     builder.button(text="⬅️ Назад", callback_data=f"adm_view_rep:{shift_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+# В keyboards/inline.py
+
+# 1. Главное меню редактирования (добавил кнопку "Добавить садик")
+def get_admin_edit_loop_kb(shift_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🏫 Добавить новый садик", callback_data=f"adm_add_kg_start:{shift_id}"))
+    builder.row(InlineKeyboardButton(text="🔍 Просмотр / Удалить садики", callback_data=f"adm_manage_shift:{shift_id}"))
+    builder.row(InlineKeyboardButton(text="🗓 Исправить дату смены", callback_data=f"adm_change_date:{shift_id}"))
+    # НОВАЯ КНОПКА:
+    builder.row(InlineKeyboardButton(text="⛽ Изменить бензин", callback_data=f"adm_change_fuel:{shift_id}"))
+    builder.row(InlineKeyboardButton(text="🏁 Завершить правки", callback_data=f"adm_finish_edit:{shift_id}"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+# 2. НОВАЯ: Петля внутри садика для админа (аналог водительской)
+def get_admin_kg_loop_kb(shift_id: int):
+    builder = InlineKeyboardBuilder()
+    # Добавить еще товар в Тот же садик (стейт kindergarten_id сохранится)
+    builder.button(text="➕ Добавить еще товар", callback_data=f"adm_more_prod_same_kg:{shift_id}")
+    # Завершить этот садик и вернуться в ГЛАВНОЕ меню правки
+    builder.button(text="✅ Завершить этот садик", callback_data=f"adm_finish_this_kg:{shift_id}")
+
     builder.adjust(1)
     return builder.as_markup()
