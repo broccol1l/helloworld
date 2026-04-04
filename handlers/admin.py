@@ -1029,17 +1029,28 @@ async def admin_stats_main(callback: types.CallbackQuery, session: AsyncSession)
 
 # 2. Финансовый Дашборд (Резюме)
 @router.callback_query(F.data.startswith("adm_stats_period:"))
-async def admin_stats_dashboard(callback: types.CallbackQuery, session: AsyncSession):
+async def admin_stats_dashboard(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
     period = callback.data.split(":")[1]
 
-    # Заглушка для кнопок, которые пока не работают
-    if period in ["custom"]:
-        await callback.answer("🛠 Этот период сделаем на следующем этапе", show_alert=True)
+    # 1. Если админ нажал "Произвольный период"
+    if period == "custom":
+        await state.set_state(AdminStatsState.waiting_custom_period)
+
+        builder = InlineKeyboardBuilder()
+        builder.button(text="❌ Отмена", callback_data="admin_stats")
+
+        await callback.message.edit_text(
+            "🗓 **Анализ за произвольный период**\n\n"
+            "Введите две даты через дефис в формате `ДД.ММ.ГГГГ - ДД.ММ.ГГГГ`.\n\n"
+            "Пример: `01.04.2026 - 15.04.2026`",
+            reply_markup=builder.as_markup(),
+            parse_mode="Markdown"
+        )
         return
 
     now = datetime.now()
 
-    # Определяем границы времени
+    # 2. Определяем границы времени
     if period == "today":
         start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -1057,13 +1068,17 @@ async def admin_stats_dashboard(callback: types.CallbackQuery, session: AsyncSes
                   "НОЯБРЬ", "ДЕКАБРЬ"]
         period_name = f"{months[now.month - 1]} {now.year}"
 
+    # 3. ЕСЛИ ЭТО КАСТОМНЫЙ ПЕРИОД (например: 20260401-20260415)
+    elif "-" in period:
+        start_str, end_str = period.split("-")
+        start_date = datetime.strptime(start_str, "%Y%m%d").replace(hour=0, minute=0, second=0)
+        end_date = datetime.strptime(end_str, "%Y%m%d").replace(hour=23, minute=59, second=59)
+        period_name = f"{start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}"
+
     # Получаем расчеты из базы
     stats = await get_dashboard_stats(session, start_date, end_date)
-
-    # Считаем рентабельность (проверка деления на ноль)
     profitability = (stats["profit"] / stats["revenue"] * 100) if stats["revenue"] > 0 else 0
 
-    # Формируем красивый текст
     text = (
         f"📊 **ИТОГИ ЗА {period_name}**:\n\n"
         f"💰 Оборот (Выручка): **{int(stats['revenue']):,} сум**\n"
@@ -1074,11 +1089,8 @@ async def admin_stats_dashboard(callback: types.CallbackQuery, session: AsyncSes
         f"📈 Рентабельность бизнеса: **{profitability:.1f}%**"
     )
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=get_dashboard_kb(period),
-        parse_mode="Markdown"
-    )
+    from keyboards.inline import get_dashboard_kb
+    await callback.message.edit_text(text, reply_markup=get_dashboard_kb(period), parse_mode="Markdown")
 
 @router.callback_query(F.data.startswith("adm_stats_drivers:"))
 async def admin_stats_drivers_list(callback: types.CallbackQuery, session: AsyncSession):
@@ -1098,6 +1110,11 @@ async def admin_stats_drivers_list(callback: types.CallbackQuery, session: Async
     elif period == "month":
         start_date = now.replace(day=1, hour=0, minute=0, second=0)
         end_date = now.replace(hour=23, minute=59, second=59)
+    # --- ДОБАВЬ ВОТ ЭТО ---
+    elif "-" in period:
+        start_str, end_str = period.split("-")
+        start_date = datetime.strptime(start_str, "%Y%m%d").replace(hour=0, minute=0, second=0)
+        end_date = datetime.strptime(end_str, "%Y%m%d").replace(hour=23, minute=59, second=59)
 
     # Получаем данные
     drivers_data = await get_drivers_performance(session, start_date, end_date)
@@ -1230,3 +1247,51 @@ async def admin_export_global_excel(callback: types.CallbackQuery, session: Asyn
                 "2. Итоги по каждому садику\n"
                 "3. Итоги по видам товаров"
     )
+
+
+@router.message(AdminStatsState.waiting_custom_period, F.text)
+async def admin_process_custom_dates(message: types.Message, state: FSMContext, session: AsyncSession):
+    text = message.text.strip()
+
+    try:
+        # Пытаемся разбить текст на две даты
+        start_str, end_str = text.split("-")
+
+        # Проверяем правильность формата и сразу ставим правильное время (00:00 и 23:59)
+        start_date = datetime.strptime(start_str.strip(), "%d.%m.%Y").replace(hour=0, minute=0, second=0)
+        end_date = datetime.strptime(end_str.strip(), "%d.%m.%Y").replace(hour=23, minute=59, second=59)
+
+        # Защита: дата начала не может быть позже даты конца
+        if start_date > end_date:
+            raise ValueError("Дата начала больше даты конца")
+
+    except ValueError:
+        await message.answer(
+            "❌ **Ошибка формата!**\nПожалуйста, введите даты строго как в примере:\n`01.04.2026 - 15.04.2026`",
+            parse_mode="Markdown")
+        return
+
+    # Выходим из состояния
+    await state.clear()
+
+    # Формируем компактную строку для callback_data (чтобы влезло в кнопку Telegram)
+    period_code = f"{start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')}"
+    period_name = f"{start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}"
+
+    # --- СЧИТАЕМ СТАТИСТИКУ ПРЯМО ЗДЕСЬ ---
+    stats = await get_dashboard_stats(session, start_date, end_date)
+    profitability = (stats["profit"] / stats["revenue"] * 100) if stats["revenue"] > 0 else 0
+
+    report_text = (
+        f"📊 **ИТОГИ ЗА {period_name}**:\n\n"
+        f"💰 Оборот (Выручка): **{int(stats['revenue']):,} сум**\n"
+        f"📉 Затраты на товар: **{int(stats['cost']):,} сум**\n"
+        f"⛽️ Затраты на бензин: **{int(stats['fuel']):,} сум**\n"
+        f"───────────────────\n"
+        f"🏆 **ЧИСТАЯ ПРИБЫЛЬ: {int(stats['profit']):,} сум**\n\n"
+        f"📈 Рентабельность бизнеса: **{profitability:.1f}%**"
+    )
+
+    # Отправляем сообщение как обычный ответ на текст (через message.answer)
+    from keyboards.inline import get_dashboard_kb
+    await message.answer(report_text, reply_markup=get_dashboard_kb(period_code), parse_mode="Markdown")

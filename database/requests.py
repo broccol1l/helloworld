@@ -213,32 +213,33 @@ async def get_shift_full_details(session: AsyncSession, shift_id: int):
 
 
 # АНАЛИТИКА
+# 1. Исправленный Дашборд
 async def get_dashboard_stats(session: AsyncSession, start_date: datetime, end_date: datetime):
-    # 1. Считаем общий расход на бензин за этот период (только по закрытым сменам)
-    fuel_query = select(func.sum(Shift.fuel_expense)).where(
+    # Теперь мы связываем смены с отгрузками и берем бензин ТОЛЬКО из непустых смен
+    query = select(
+        Shift.id,
+        Shift.fuel_expense,
+        func.sum(Delivery.weight_fact * Delivery.p_sadik_fact).label("revenue"),
+        func.sum(Delivery.weight_fact * Delivery.p_zakup_fact).label("cost")
+    ).join(Delivery, Delivery.shift_id == Shift.id).where(
         Shift.opened_at >= start_date,
         Shift.opened_at <= end_date,
         Shift.is_closed == True
-    )
-    total_fuel = await session.scalar(fuel_query) or 0.0
+    ).group_by(Shift.id, Shift.fuel_expense)
 
-    # 2. Считаем общую выручку и себестоимость (используем JOIN для связи смен и товаров)
-    # Выручка = факт * цена садика
-    # Себестоимость = факт * цена закупа
-    delivery_query = select(
-        func.sum(Delivery.weight_fact * Delivery.p_sadik_fact).label("total_revenue"),
-        func.sum(Delivery.weight_fact * Delivery.p_zakup_fact).label("total_cost")
-    ).join(Shift, Delivery.shift_id == Shift.id).where(
-        Shift.opened_at >= start_date,
-        Shift.opened_at <= end_date,
-        Shift.is_closed == True
-    )
+    result = await session.execute(query)
+    rows = result.all()
 
-    result = await session.execute(delivery_query)
-    row = result.first()
+    total_revenue = 0.0
+    total_cost = 0.0
+    total_fuel = 0.0
 
-    total_revenue = row.total_revenue or 0.0
-    total_cost = row.total_cost or 0.0
+    # Складываем всё вместе (бензин теперь считается 1 раз для каждой реальной смены)
+    for row in rows:
+        total_revenue += row.revenue or 0.0
+        total_cost += row.cost or 0.0
+        total_fuel += row.fuel_expense or 0.0
+
     net_profit = total_revenue - total_cost - total_fuel
 
     return {
@@ -248,44 +249,50 @@ async def get_dashboard_stats(session: AsyncSession, start_date: datetime, end_d
         "profit": net_profit
     }
 
-
+# 2. Исправленная детализация по водителям
 async def get_drivers_performance(session: AsyncSession, start_date: datetime, end_date: datetime):
-    # Запрос считает: Выручку, Себестоимость и Бензин для каждого водителя
+    # Тот же принцип для рейтинга водителей
     query = select(
         User.id,
         User.full_name,
+        Shift.id.label("shift_id"),
+        Shift.fuel_expense,
         func.sum(Delivery.weight_fact * Delivery.p_sadik_fact).label("revenue"),
-        func.sum(Delivery.weight_fact * Delivery.p_zakup_fact).label("cost"),
-        # Бензин берем из таблицы смен, поэтому нужен отдельный подзапрос или группировка
-    ).join(Shift, Delivery.shift_id == Shift.id) \
-        .join(User, Shift.user_id == User.id) \
-        .where(
+        func.sum(Delivery.weight_fact * Delivery.p_zakup_fact).label("cost")
+    ).join(Shift, Delivery.shift_id == Shift.id)\
+     .join(User, Shift.user_id == User.id)\
+     .where(
         Shift.opened_at >= start_date,
         Shift.opened_at <= end_date,
         Shift.is_closed == True
-    ).group_by(User.id, User.full_name)
+    ).group_by(User.id, User.full_name, Shift.id, Shift.fuel_expense)
 
     result = await session.execute(query)
     rows = result.all()
 
-    drivers_stats = []
+    # Аккуратно собираем данные по каждому водителю
+    drivers_dict = {}
     for row in rows:
-        # Для каждого водителя отдельно добираем сумму его бензина за период
-        fuel_query = select(func.sum(Shift.fuel_expense)).where(
-            Shift.user_id == row.id,
-            Shift.opened_at >= start_date,
-            Shift.opened_at <= end_date,
-            Shift.is_closed == True
-        )
-        fuel = await session.scalar(fuel_query) or 0.0
+        u_id = row.id
+        if u_id not in drivers_dict:
+            drivers_dict[u_id] = {
+                "id": u_id,
+                "name": row.full_name,
+                "revenue": 0.0,
+                "cost": 0.0,
+                "fuel": 0.0
+            }
+        drivers_dict[u_id]["revenue"] += row.revenue or 0.0
+        drivers_dict[u_id]["cost"] += row.cost or 0.0
+        drivers_dict[u_id]["fuel"] += row.fuel_expense or 0.0
 
-        revenue = row.revenue or 0.0
-        cost = row.cost or 0.0
-        profit = revenue - cost - fuel
-
+    # Считаем итоговую прибыль
+    drivers_stats = []
+    for d in drivers_dict.values():
+        profit = d["revenue"] - d["cost"] - d["fuel"]
         drivers_stats.append({
-            "id": row.id,
-            "name": row.full_name,
+            "id": d["id"],
+            "name": d["name"],
             "profit": profit
         })
 
