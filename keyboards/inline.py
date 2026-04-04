@@ -448,3 +448,65 @@ def get_admin_kg_loop_kb(shift_id: int):
 
     builder.adjust(1)
     return builder.as_markup()
+
+
+# --- АНАЛИТИКА: ВЫБОР ПЕРИОДА ---
+def get_analytics_period_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🕒 За сегодня", callback_data="adm_stats_period:today")
+    builder.button(text="🕒 За вчера", callback_data="adm_stats_period:yesterday")
+    builder.button(text="📅 Текущий месяц", callback_data="adm_stats_period:month")
+
+    # Кнопки, которые сделаем позже на следующих этапах
+    builder.button(text="🗓 Произвольный период", callback_data="adm_stats_period:custom")
+    builder.button(text="📥 Глобальный Excel", callback_data="adm_stats_export_all:xlsx")
+    builder.button(text="📕 Глобальный PDF", callback_data="adm_stats_export_all:pdf")
+
+    # Замени "admin_main" на тот callback, который у тебя ведет в главное меню админки
+    builder.button(text="⬅️ Назад в админку", callback_data="admin_exit")
+    builder.adjust(2, 2, 2, 1)
+    return builder.as_markup()
+
+
+# --- АНАЛИТИКА: ДАШБОРД (МЕНЮ ВНУТРИ ПЕРИОДА) ---
+def get_dashboard_kb(period: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👥 Детализация по водителям", callback_data=f"adm_stats_drivers:{period}")
+    builder.button(text="📦 Топ товаров", callback_data=f"adm_stats_products:{period}")
+    builder.button(text="📗 Скачать Excel", callback_data=f"adm_stats_dl_xlsx:{period}")
+    builder.button(text="📕 Скачать PDF", callback_data=f"adm_stats_dl_pdf:{period}")
+    builder.button(text="⬅️ Назад к выбору периода", callback_data="admin_stats")
+    builder.adjust(1, 1, 2, 1)
+    return builder.as_markup()
+
+
+def get_drivers_stats_kb(drivers_data, period: str, page: int = 0):
+    builder = InlineKeyboardBuilder()
+    limit = 6
+    start = page * limit
+    end = start + limit
+
+    # Иконки для топ-3
+    medals = ["🥇", "🥈", "🥉"]
+
+    for i, d in enumerate(drivers_data[start:end]):
+        rank = medals[i + start] if (i + start) < 3 else "👤"
+        builder.button(
+            text=f"{rank} {d['name']}: +{int(d['profit']):,} сум",
+            callback_data=f"adm_stats_dr_view:{d['id']}:{period}"  # Если захотим детальный отчет по одному
+        )
+
+    builder.adjust(1)
+
+    # Навигация (если водителей много)
+    if len(drivers_data) > limit:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"adm_stats_drivers:{period}:{page - 1}"))
+        if end < len(drivers_data):
+            nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"adm_stats_drivers:{period}:{page + 1}"))
+        if nav_row:
+            builder.row(*nav_row)
+
+    builder.row(InlineKeyboardButton(text="⬅️ Назад к итогам", callback_data=f"adm_stats_period:{period}"))
+    return builder.as_markup()

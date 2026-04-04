@@ -37,3 +37,7 @@ class AdminEdit(StatesGroup):
 class KGState(StatesGroup):
     waiting_kg_name = State()      # Для добавления
     waiting_kg_edit_name = State() # Для изменения названия
+
+
+class AdminStatsState(StatesGroup):
+    waiting_custom_period = State()

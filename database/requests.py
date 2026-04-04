@@ -210,3 +210,106 @@ async def get_shift_full_details(session: AsyncSession, shift_id: int):
     )
     result = await session.execute(query)
     return result.scalar_one_or_none()
+
+
+# АНАЛИТИКА
+async def get_dashboard_stats(session: AsyncSession, start_date: datetime, end_date: datetime):
+    # 1. Считаем общий расход на бензин за этот период (только по закрытым сменам)
+    fuel_query = select(func.sum(Shift.fuel_expense)).where(
+        Shift.opened_at >= start_date,
+        Shift.opened_at <= end_date,
+        Shift.is_closed == True
+    )
+    total_fuel = await session.scalar(fuel_query) or 0.0
+
+    # 2. Считаем общую выручку и себестоимость (используем JOIN для связи смен и товаров)
+    # Выручка = факт * цена садика
+    # Себестоимость = факт * цена закупа
+    delivery_query = select(
+        func.sum(Delivery.weight_fact * Delivery.p_sadik_fact).label("total_revenue"),
+        func.sum(Delivery.weight_fact * Delivery.p_zakup_fact).label("total_cost")
+    ).join(Shift, Delivery.shift_id == Shift.id).where(
+        Shift.opened_at >= start_date,
+        Shift.opened_at <= end_date,
+        Shift.is_closed == True
+    )
+
+    result = await session.execute(delivery_query)
+    row = result.first()
+
+    total_revenue = row.total_revenue or 0.0
+    total_cost = row.total_cost or 0.0
+    net_profit = total_revenue - total_cost - total_fuel
+
+    return {
+        "revenue": total_revenue,
+        "cost": total_cost,
+        "fuel": total_fuel,
+        "profit": net_profit
+    }
+
+
+async def get_drivers_performance(session: AsyncSession, start_date: datetime, end_date: datetime):
+    # Запрос считает: Выручку, Себестоимость и Бензин для каждого водителя
+    query = select(
+        User.id,
+        User.full_name,
+        func.sum(Delivery.weight_fact * Delivery.p_sadik_fact).label("revenue"),
+        func.sum(Delivery.weight_fact * Delivery.p_zakup_fact).label("cost"),
+        # Бензин берем из таблицы смен, поэтому нужен отдельный подзапрос или группировка
+    ).join(Shift, Delivery.shift_id == Shift.id) \
+        .join(User, Shift.user_id == User.id) \
+        .where(
+        Shift.opened_at >= start_date,
+        Shift.opened_at <= end_date,
+        Shift.is_closed == True
+    ).group_by(User.id, User.full_name)
+
+    result = await session.execute(query)
+    rows = result.all()
+
+    drivers_stats = []
+    for row in rows:
+        # Для каждого водителя отдельно добираем сумму его бензина за период
+        fuel_query = select(func.sum(Shift.fuel_expense)).where(
+            Shift.user_id == row.id,
+            Shift.opened_at >= start_date,
+            Shift.opened_at <= end_date,
+            Shift.is_closed == True
+        )
+        fuel = await session.scalar(fuel_query) or 0.0
+
+        revenue = row.revenue or 0.0
+        cost = row.cost or 0.0
+        profit = revenue - cost - fuel
+
+        drivers_stats.append({
+            "id": row.id,
+            "name": row.full_name,
+            "profit": profit
+        })
+
+    # Сортируем: самые прибыльные вверху
+    return sorted(drivers_stats, key=lambda x: x['profit'], reverse=True)
+
+async def get_all_deliveries_for_export(session: AsyncSession):
+    query = select(
+        Shift.id.label("shift_id"),                 # Нужно для расчетов доли
+        Shift.opened_at.label("Дата"),
+        User.full_name.label("Водитель"),
+        Kindergarten.name.label("Садик"),
+        Product.name.label("Товар"),
+        Product.unit.label("Ед_изм"),
+        Delivery.weight_plan.label("План"),
+        Delivery.weight_fact.label("Факт"),
+        Delivery.p_sadik_fact.label("Цена_Садик"),
+        Delivery.p_zakup_fact.label("Цена_Закуп"),
+        Shift.fuel_expense.label("Бензин_Смены"),   # Тянем бензин из базы
+        (Delivery.weight_fact * Delivery.p_sadik_fact).label("Выручка"),
+        (Delivery.weight_fact * Delivery.p_zakup_fact).label("Закуп_сумма")
+    ).join(Delivery.shift).join(Delivery.product).join(Delivery.kindergarten).join(Shift.driver).where(
+        Shift.is_closed == True
+    ).order_by(Shift.opened_at.desc())
+
+    result = await session.execute(query)
+    return [dict(row._mapping) for row in result.all()]

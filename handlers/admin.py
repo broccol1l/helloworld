@@ -7,20 +7,27 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.orm import selectinload
 from aiogram.types import Message
-from database.requests import get_user_shifts, update_shift_date, get_user, delete_shift_full, get_shift_by_id, get_shift_deliveries, unclose_shift, delete_kg_from_active_shift
+import pandas as pd
+from io import BytesIO
+from aiogram.types import FSInputFile, BufferedInputFile
+from database.requests import (get_user_shifts, update_shift_date, get_user, delete_shift_full,
+                               get_shift_by_id, get_shift_deliveries, unclose_shift,
+                               delete_kg_from_active_shift, get_dashboard_stats,
+                               get_drivers_performance, get_all_deliveries_for_export)
 
 # Импортируем твои модели, стейты и клавиатуры
 from database.models import User, Product, Kindergarten, Shift, Delivery
-from utils.states import AdminState, AdminEdit, KGState, DeliveryState
+from utils.states import AdminState, AdminEdit, KGState, DeliveryState, AdminStatsState
 from keyboards.inline import (admin_main_kb, get_products_list_kb, get_product_card_kb,
                               get_cancel_kb, get_units_kb, get_kg_list_kb,
                               get_kg_card_kb, get_user_card_kb, get_users_list_kb,
                               get_admin_user_history_kb, get_admin_report_tools_kb,
                               get_admin_edit_menu_kb, get_admin_manage_kgs_kb,
-                              get_admin_edit_loop_kb, get_kg_paging_kb, get_products_paging_kb)
+                              get_admin_edit_loop_kb, get_kg_paging_kb, get_products_paging_kb,
+                              get_analytics_period_kb, get_dashboard_kb, get_drivers_stats_kb)
 
 from keyboards.reply import main_menu_kb
 
@@ -613,25 +620,25 @@ async def admin_user_set_role(callback: types.CallbackQuery, session: AsyncSessi
     await admin_user_view(callback, session)
 
 
-@router.callback_query(F.data == "admin_stats")
-async def admin_stats_view(callback: types.CallbackQuery, session: AsyncSession):
-    # Просто считаем количество всего в базе
-    from sqlalchemy import func
-
-    users_count = await session.scalar(select(func.count(User.id)))
-    products_count = await session.scalar(select(func.count(Product.id)))
-    kg_count = await session.scalar(select(func.count(Kindergarten.id)))
-
-    text = (
-        "📊 **Общая статистика бота**\n\n"
-        f"👥 Пользователей в базе: {users_count}\n"
-        f"📦 Видов товаров: {products_count}\n"
-        f"🏫 Садиков (объектов): {kg_count}\n\n"
-        "📈 Подробные отчеты будут доступны после первых отгрузок!"
-    )
-
-    await callback.message.edit_text(text, reply_markup=admin_main_kb(), parse_mode="Markdown")
-    await callback.answer()
+# @router.callback_query(F.data == "admin_stats")
+# async def admin_stats_view(callback: types.CallbackQuery, session: AsyncSession):
+#     # Просто считаем количество всего в базе
+#     from sqlalchemy import func
+#
+#     users_count = await session.scalar(select(func.count(User.id)))
+#     products_count = await session.scalar(select(func.count(Product.id)))
+#     kg_count = await session.scalar(select(func.count(Kindergarten.id)))
+#
+#     text = (
+#         "📊 **Общая статистика бота**\n\n"
+#         f"👥 Пользователей в базе: {users_count}\n"
+#         f"📦 Видов товаров: {products_count}\n"
+#         f"🏫 Садиков (объектов): {kg_count}\n\n"
+#         "📈 Подробные отчеты будут доступны после первых отгрузок!"
+#     )
+#
+#     await callback.message.edit_text(text, reply_markup=admin_main_kb(), parse_mode="Markdown")
+#     await callback.answer()
 
 
 # 1. Исправленный список истории
@@ -988,4 +995,238 @@ async def admin_change_fuel_process(message: types.Message, state: FSMContext, s
         f"✅ Расход на бензин обновлен на **{new_fuel:,} сум**.\n\nЧто делаем дальше?",
         reply_markup=get_admin_edit_loop_kb(shift_id),
         parse_mode="Markdown"
+    )
+
+
+# АНАЛИТИКА
+@router.callback_query(F.data == "admin_stats")
+async def admin_stats_main(callback: types.CallbackQuery, session: AsyncSession):
+
+
+    # 1. Считаем количество записей в базе (твой старый код)
+    users_count = await session.scalar(select(func.count(User.id)))
+    products_count = await session.scalar(select(func.count(Product.id)))
+    kg_count = await session.scalar(select(func.count(Kindergarten.id)))
+
+    # 2. Формируем текст: Сначала общая стата, потом призыв выбрать период
+    text = (
+        "📊 **ОБЩАЯ СТАТИСТИКА БАЗЫ**\n\n"
+        f"👥 Пользователей: **{users_count}**\n"
+        f"📦 Видов товаров: **{products_count}**\n"
+        f"🏫 Садиков: **{kg_count}**\n"
+        "───────────────────\n"
+        "📈 **ФИНАНСОВАЯ АНАЛИТИКА**\n"
+        "Выберите период для расчета выручки и чистой прибыли:"
+    )
+
+    # 3. Выводим новые кнопки выбора периода
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_analytics_period_kb(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+# 2. Финансовый Дашборд (Резюме)
+@router.callback_query(F.data.startswith("adm_stats_period:"))
+async def admin_stats_dashboard(callback: types.CallbackQuery, session: AsyncSession):
+    period = callback.data.split(":")[1]
+
+    # Заглушка для кнопок, которые пока не работают
+    if period in ["custom"]:
+        await callback.answer("🛠 Этот период сделаем на следующем этапе", show_alert=True)
+        return
+
+    now = datetime.now()
+
+    # Определяем границы времени
+    if period == "today":
+        start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        period_name = "СЕГОДНЯ"
+
+    elif period == "yesterday":
+        start_date = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = start_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        period_name = "ВЧЕРА"
+
+    elif period == "month":
+        start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        months = ["ЯНВАРЬ", "ФЕВРАЛЬ", "МАРТ", "АПРЕЛЬ", "МАЙ", "ИЮНЬ", "ИЮЛЬ", "АВГУСТ", "СЕНТЯБРЬ", "ОКТЯБРЬ",
+                  "НОЯБРЬ", "ДЕКАБРЬ"]
+        period_name = f"{months[now.month - 1]} {now.year}"
+
+    # Получаем расчеты из базы
+    stats = await get_dashboard_stats(session, start_date, end_date)
+
+    # Считаем рентабельность (проверка деления на ноль)
+    profitability = (stats["profit"] / stats["revenue"] * 100) if stats["revenue"] > 0 else 0
+
+    # Формируем красивый текст
+    text = (
+        f"📊 **ИТОГИ ЗА {period_name}**:\n\n"
+        f"💰 Оборот (Выручка): **{int(stats['revenue']):,} сум**\n"
+        f"📉 Затраты на товар: **{int(stats['cost']):,} сум**\n"
+        f"⛽️ Затраты на бензин: **{int(stats['fuel']):,} сум**\n"
+        f"───────────────────\n"
+        f"🏆 **ЧИСТАЯ ПРИБЫЛЬ: {int(stats['profit']):,} сум**\n\n"
+        f"📈 Рентабельность бизнеса: **{profitability:.1f}%**"
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_dashboard_kb(period),
+        parse_mode="Markdown"
+    )
+
+@router.callback_query(F.data.startswith("adm_stats_drivers:"))
+async def admin_stats_drivers_list(callback: types.CallbackQuery, session: AsyncSession):
+    # Разбираем: adm_stats_drivers : период : страница
+    parts = callback.data.split(":")
+    period = parts[1]
+    page = int(parts[2]) if len(parts) > 2 else 0
+
+    # Повторяем логику дат (такую же, как в дашборде)
+    now = datetime.now()
+    if period == "today":
+        start_date = now.replace(hour=0, minute=0, second=0)
+        end_date = now.replace(hour=23, minute=59, second=59)
+    elif period == "yesterday":
+        start_date = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0)
+        end_date = start_date.replace(hour=23, minute=59, second=59)
+    elif period == "month":
+        start_date = now.replace(day=1, hour=0, minute=0, second=0)
+        end_date = now.replace(hour=23, minute=59, second=59)
+
+    # Получаем данные
+    drivers_data = await get_drivers_performance(session, start_date, end_date)
+
+    if not drivers_data:
+        await callback.answer("За этот период данных по водителям нет.", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        f"👥 **Эффективность водителей**\n"
+        f"Период: {period.upper()}\n"
+        f"(Чистая прибыль после вычета закупа и бензина)",
+        reply_markup=get_drivers_stats_kb(drivers_data, period, page),
+        parse_mode="Markdown"
+    )
+
+
+@router.callback_query(F.data == "adm_stats_export_all:xlsx")
+async def admin_export_global_excel(callback: types.CallbackQuery, session: AsyncSession):
+    await callback.answer("⏳ Формирую детальный отчет с итогами...", show_alert=False)
+
+    raw_data = await get_all_deliveries_for_export(session)
+
+    if not raw_data:
+        await callback.answer("❌ Нет данных для экспорта", show_alert=True)
+        return
+
+    df = pd.DataFrame(raw_data)
+    df['Дата'] = pd.to_datetime(df['Дата']).dt.strftime('%d.%m.%Y %H:%M')
+
+    # --- УМНЫЙ РАСЧЕТ БЕНЗИНА ---
+    # 1. Если бензин не указан (None), ставим 0
+    df['Бензин_Смены'] = df['Бензин_Смены'].fillna(0).astype(float)
+
+    # 2. Считаем, сколько всего отгрузок было в каждой смене
+    shift_counts = df.groupby('shift_id')['shift_id'].transform('count')
+
+    # 3. Размазываем бензин поровну на все отгрузки этой смены
+    df['Бензин (доля)'] = df['Бензин_Смены'] / shift_counts
+
+    # 4. Считаем ЧИСТУЮ маржу: Выручка - Закуп - Бензин
+    df['Прибыль_Маржа'] = df['Выручка'] - df['Закуп_сумма'] - df['Бензин (доля)']
+
+    # Удаляем технические колонки (они не нужны бухгалтеру)
+    df = df.drop(columns=['shift_id', 'Бензин_Смены'])
+
+    # --- СВОДНЫЕ ТАБЛИЦЫ ---
+    kg_summary = df.groupby("Садик").agg({
+        "Выручка": "sum",
+        "Закуп_сумма": "sum",
+        "Бензин (доля)": "sum",  # Добавили бензин
+        "Прибыль_Маржа": "sum",
+        "Факт": "count"
+    }).rename(columns={"Факт": "Кол_во_отгрузок"}).reset_index()
+
+    prod_summary = df.groupby("Товар").agg({
+        "Факт": "sum",
+        "Выручка": "sum",
+        "Закуп_сумма": "sum",
+        "Бензин (доля)": "sum",  # Добавили бензин
+        "Прибыль_Маржа": "sum"
+    }).reset_index()
+
+    # --- ДОБАВЛЯЕМ СТРОКИ "ИТОГО:" ---
+    totals_log = pd.DataFrame([{
+        'Дата': 'ИТОГО:',
+        'План': df['План'].sum(),
+        'Факт': df['Факт'].sum(),
+        'Выручка': df['Выручка'].sum(),
+        'Закуп_сумма': df['Закуп_сумма'].sum(),
+        'Бензин (доля)': df['Бензин (доля)'].sum(),  # Итог по бензину
+        'Прибыль_Маржа': df['Прибыль_Маржа'].sum()
+    }])
+    df = pd.concat([df, totals_log], ignore_index=True)
+
+    totals_kg = pd.DataFrame([{
+        'Садик': 'ИТОГО:',
+        'Кол_во_отгрузок': kg_summary['Кол_во_отгрузок'].sum(),
+        'Выручка': kg_summary['Выручка'].sum(),
+        'Закуп_сумма': kg_summary['Закуп_сумма'].sum(),
+        'Бензин (доля)': kg_summary['Бензин (доля)'].sum(),
+        'Прибыль_Маржа': kg_summary['Прибыль_Маржа'].sum()
+    }])
+    kg_summary = pd.concat([kg_summary, totals_kg], ignore_index=True)
+
+    totals_prod = pd.DataFrame([{
+        'Товар': 'ИТОГО:',
+        'Факт': prod_summary['Факт'].sum(),
+        'Выручка': prod_summary['Выручка'].sum(),
+        'Закуп_сумма': prod_summary['Закуп_сумма'].sum(),
+        'Бензин (доля)': prod_summary['Бензин (доля)'].sum(),
+        'Прибыль_Маржа': prod_summary['Прибыль_Маржа'].sum()
+    }])
+    prod_summary = pd.concat([prod_summary, totals_prod], ignore_index=True)
+
+    # --- ЗАПИСЬ В EXCEL ---
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name="Общий лог", index=False)
+        kg_summary.to_excel(writer, sheet_name="Итоги по Садикам", index=False)
+        prod_summary.to_excel(writer, sheet_name="Итоги по Товарам", index=False)
+
+        # Расширяем колонки
+        for sheet_name in writer.sheets:
+            worksheet = writer.sheets[sheet_name]
+            for col in worksheet.columns:
+                max_length = 0
+                column_letter = col[0].column_letter
+                for cell in col:
+                    try:
+                        if cell.value:
+                            max_length = max(max_length, len(str(cell.value)))
+                    except:
+                        pass
+                worksheet.column_dimensions[column_letter].width = max_length + 2
+
+    output.seek(0)
+    file_content = output.getvalue()
+
+    document = BufferedInputFile(
+        file_content,
+        filename=f"Global_Report_{datetime.now().strftime('%d_%m_%Y')}.xlsx"
+    )
+
+    await callback.message.answer_document(
+        document,
+        caption="✅ Глобальный отчет сформирован.\n\n"
+                "В файле 3 листа (с учетом бензина и итогами):\n"
+                "1. Общий лог операций\n"
+                "2. Итоги по каждому садику\n"
+                "3. Итоги по видам товаров"
     )
