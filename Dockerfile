@@ -17,4 +17,4 @@ COPY . .
 # Создаем папку для отчетов, если забыли
 RUN mkdir -p temp
 
-CMD ["python", "main.py"]
+CMD ["python", "bot.py"]
