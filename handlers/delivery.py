@@ -281,7 +281,10 @@ async def close_shift_done(message: types.Message, state: FSMContext, session: A
     fuel_text = message.text.split(' ')[0]
 
     try:
-        fuel_amount = float(fuel_text.replace(',', '.'))
+        # fuel_amount = float(fuel_text.replace(',', '.')) LAST SAVE
+        clean_fuel = fuel_text.replace('.', '').replace(',', '')
+        fuel_amount = float(clean_fuel)
+
         data = await state.get_data()
         shift_id = data.get('shift_id')
 
@@ -320,7 +323,7 @@ async def close_shift_done(message: types.Message, state: FSMContext, session: A
         final_net_amount = total_shift_sum - fuel_amount
 
         report += f"💰 Umumiy tushum: {total_shift_sum:,} so'm\n" # 💰 Общая выручка: {total_shift_sum:,} сум
-        report += f"⛽ Benzin: -{fuel_amount:,} so'm\n" # Бензин
+        report += f"⛽ Benzin: -{int(fuel_amount):,} so'm\n" # Бензин # -{fuel_amount:,} LAST SAVE
         report += "───────────────────\n" #ИТОГО К ВЫДАЧЕ:
         report += f"💵 <b>TOPSHIRILADIGAN JAMI SUMMA: {final_net_amount:,} so'm</b>\n\n"  #Теперь водитель видит разницу
         report += "🏁 Smena yopildi. Maroqli hordiq chiqaring!" # "🏁 Смена закрыта. Хорошего отдыха!"
