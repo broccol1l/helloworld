@@ -29,50 +29,50 @@ def create_shift_excel(shift, is_admin=False):
     for d in sorted_deliveries:
         diff = d.weight_fact - d.weight_plan  # Считаем разницу
         row = {
-            "Садик": d.kindergarten.name,
-            "Товар": d.product.name,
-            "Ед.": d.product.unit,
-            "План": d.weight_plan,
-            "Факт": d.weight_fact,
-            "Разница": diff,
-            "Цена": d.p_sadik_fact,
-            "Сумма": d.total_price_sadik
+            "Bog'cha": d.kindergarten.name,           # Садик
+            "Mahsulot": d.product.name,               # Товар
+            "Birl.": d.product.unit,                  # Ед.
+            "Reja": d.weight_plan,                    # План
+            "Fakt": d.weight_fact,                    # Факт
+            "Farq": diff,                             # Разница
+            "Narxi": d.p_sadik_fact,                  # Цена
+            "Summa": d.total_price_sadik              # Сумма
         }
         if is_admin:
-            row["Закуп"] = d.p_zakup_fact
-            row["Прибыль"] = d.net_profit
+            row["Xarid"] = d.p_zakup_fact  # Закуп
+            row["Foyda"] = d.net_profit  # Прибыль
         data.append(row)
 
     df = pd.DataFrame(data)
     os.makedirs("temp", exist_ok=True)
-    suffix = "ADMIN" if is_admin else "DRIVER"
-    file_path = os.path.join("temp", f"Report_{suffix}_{shift.opened_at.strftime('%d_%m')}_{shift.id}.xlsx")
+    suffix = "ADMIN" if is_admin else "HAYDOVCHI"
+    file_path = os.path.join("temp", f"Hisobot_{suffix}_{shift.opened_at.strftime('%d_%m')}_{shift.id}.xlsx")
 
     with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Отчет', startrow=4)
-        ws = writer.sheets['Отчет']
+        df.to_excel(writer, index=False, sheet_name='Hisobot', startrow=4)
+        ws = writer.sheets['Hisobot']
 
         # Шапка
-        ws.cell(row=1, column=1, value=f"ОТЧЕТ ({suffix}) ОТ {shift.opened_at.strftime('%d.%m.%Y')}")
-        ws.cell(row=2, column=1, value=f"Водитель: {shift.driver.full_name}")
-        ws.cell(row=3, column=1, value=f"Телефон: {shift.driver.phone}")
+        ws.cell(row=1, column=1, value=f"{shift.opened_at.strftime('%d.%m.%Y')} SANA UCHUN HISOBOT ({suffix})")
+        ws.cell(row=2, column=1, value=f"Haydovchi: {shift.driver.full_name}")
+        ws.cell(row=3, column=1, value=f"Telefon: {shift.driver.phone}")
 
         # Итоги
         last_row = len(data) + 6
         total_rev = sum(d.total_price_sadik for d in shift.deliveries)
         fuel = shift.fuel_expense or 0
 
-        ws.cell(row=last_row, column=1, value="ОБЩАЯ ВЫРУЧКА:")
+        ws.cell(row=last_row, column=1, value="ОБЩАЯ ВЫРУЧКА:") # ОБЩАЯ ВЫРУЧКА
         ws.cell(row=last_row, column=2, value=total_rev)
-        ws.cell(row=last_row + 1, column=1, value="БЕНЗИН:")
+        ws.cell(row=last_row + 1, column=1, value="BENZIN:") # БЕНЗИН
         ws.cell(row=last_row + 1, column=2, value=fuel)
 
         if is_admin:
             total_cost = sum(d.total_cost_zakup for d in shift.deliveries)
-            ws.cell(row=last_row + 2, column=1, value="ЧИСТАЯ ПРИБЫЛЬ:")
+            ws.cell(row=last_row + 2, column=1, value="SOF FOYDA:")
             ws.cell(row=last_row + 2, column=2, value=total_rev - total_cost - fuel)
         else:
-            ws.cell(row=last_row + 2, column=1, value="ИТОГО К ВЫДАЧЕ:")
+            ws.cell(row=last_row + 2, column=1, value="TOPSHIRILADIGAN JAMI SUMMA:")
             ws.cell(row=last_row + 2, column=2, value=total_rev - fuel)
 
         # Ширина колонок
@@ -85,8 +85,8 @@ def create_shift_excel(shift, is_admin=False):
 # --- PDF GENERATION ---
 def create_shift_pdf(shift, is_admin=False):
     os.makedirs("temp", exist_ok=True)
-    suffix = "ADMIN" if is_admin else "DRIVER"
-    file_path = os.path.join("temp", f"Report_{suffix}_{shift.id}.pdf")
+    suffix = "ADMIN" if is_admin else "HAYDOVCHI"
+    file_path = os.path.join("temp", f"Hisobot_{suffix}_{shift.id}.pdf")
 
     doc = SimpleDocTemplate(file_path, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
 
@@ -95,15 +95,15 @@ def create_shift_pdf(shift, is_admin=False):
 
     elements = []
 
-    header_text = f"<b>ОТЧЕТ ({suffix}) ОТ {shift.opened_at.strftime('%d.%m.%Y')}</b><br/>"
-    header_text += f"Водитель: {shift.driver.full_name} | Тел: {shift.driver.phone}"
+    header_text = f"<b>{shift.opened_at.strftime('%d.%m.%Y')} SANA UCHUN HISOBOT ({suffix})</b><br/>"
+    header_text += f"Haydovchi: {shift.driver.full_name} | Tel: {shift.driver.phone}"
     elements.append(Paragraph(header_text, ParagraphStyle('H', fontName=FONT_NAME, fontSize=10)))
     elements.append(Spacer(1, 15))
 
     # Заголовки (Добавили Разн.)
-    header = ["Объект", "Товар", "Ед.", "План", "Факт", "Разн.", "Цена", "Сумма"]
+    header = ["Obyekt", "Mahsulot", "Birl.", "Reja", "Fakt", "Farq", "Narxi", "Summa"]
     if is_admin:
-        header += ["Закуп", "Прибыль"]
+        header += ["Xarid", "Foyda"]
 
     table_data = [[Paragraph(h, cell_style) for h in header]]
     sorted_deliveries = sorted(shift.deliveries, key=lambda x: x.id)
@@ -148,13 +148,15 @@ def create_shift_pdf(shift, is_admin=False):
     # Итоги
     total_rev = sum(d.total_price_sadik for d in shift.deliveries)
     fuel = shift.fuel_expense or 0
-    res_text = f"ВЫРУЧКА: <b>{total_rev:,.0f}</b> | БЕНЗИН: <b>{fuel:,.0f}</b>"
+    res_text = f"TUSHUM: <b>{total_rev:,.0f}</b> | BENZIN: <b>{fuel:,.0f}</b>"
 
     if is_admin:
         total_cost = sum(d.total_cost_zakup for d in shift.deliveries)
-        res_text += f" | ПРИБЫЛЬ: <b>{total_rev - total_cost - fuel:,.0f} сум</b>"
+        # ПРИБЫЛЬ -> FOYDA
+        res_text += f" | FOYDA: <b>{total_rev - total_cost - fuel:,.0f} so'm</b>"
     else:
-        res_text += f" | ИТОГО: <b>{total_rev - fuel:,.0f} сум</b>"
+        # ИТОГО -> JAMI
+        res_text += f" | JAMI: <b>{total_rev - fuel:,.0f} so'm</b>"
 
     elements.append(Paragraph(res_text, ParagraphStyle('S', fontName=FONT_NAME, fontSize=9)))
     doc.build(elements)

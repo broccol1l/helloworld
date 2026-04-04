@@ -38,7 +38,8 @@ async def add_kindergarten(session: AsyncSession, name: str):
 
 # --- РАБОТА С ТОВАРАМИ ---
 async def get_all_products(session: AsyncSession):
-    query = select(Product).order_by(Product.name)
+    # Теперь и водитель, и админ видят только активные товары
+    query = select(Product).where(Product.is_active == True).order_by(Product.name)
     result = await session.execute(query)
     return result.scalars().all()
 

@@ -31,12 +31,13 @@ async def show_kindergartens(message: types.Message, state: FSMContext, session:
 
     # Отправляем список садиков
     await message.answer(
-        "Выберите садик для начала отгрузки:",
+        "Yuk tushirishni boshlash uchun bog'chani tanlang:",
         reply_markup=get_kg_paging_kb(kgs, page=0)
     )
+    #Выберите садик для начала отгрузки:
 
 
-@router.message(F.text == "📦 Добавить отгрузку")
+@router.message(F.text == "📦 Yuk qo'shish") # 📦 Добавить отгрузку
 async def start_delivery_with_date(message: types.Message, state: FSMContext, session: AsyncSession):
     user = await requests.get_user(session, message.from_user.id)
     shift = await requests.get_active_shift(session, user.id)
@@ -47,9 +48,10 @@ async def start_delivery_with_date(message: types.Message, state: FSMContext, se
         await show_kindergartens(message, state, session)
     else:
         await message.answer(
-            "За какой день вводим отгрузки?",
+            "Yuklarni qaysi kun uchun kiritamiz?",
             reply_markup=inline.get_date_selection_kb()
         )
+        # За какой день вводим отгрузки?
 
 @router.callback_query(F.data.startswith("set_date:"))
 async def set_shift_date(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
@@ -62,7 +64,8 @@ async def set_shift_date(callback: types.CallbackQuery, state: FSMContext, sessi
     # Сохраняем id новой смены в стейт
     await state.update_data(shift_id=shift.id)
 
-    await callback.message.edit_text(f"✅ Смена открыта на {target_date.strftime('%d.%m.%Y')}")
+    await callback.message.edit_text(f"✅ Smena {target_date.strftime('%d.%m.%Y')} sanasiga ochildi")
+    #✅ Смена открыта на {target_date.strftime('%d.%m.%Y')}
     await show_kindergartens(callback.message, state, session)
 
 # 2. Обработка выбора садика
@@ -84,10 +87,11 @@ async def delivery_object_chosen(callback: types.CallbackQuery, callback_data: K
     await state.set_state(DeliveryState.choosing_product)
 
     await callback.message.edit_text(
-        f"🏢 Объект: <b>{kg.name}</b>\nТеперь выберите товар:",
+        f"🏢 Obyekt: <b>{kg.name}</b>\nEndi mahsulotni tanlang:",
         reply_markup=get_products_paging_kb(products),
         parse_mode="HTML"
     )
+    # 🏢 Объект: {kg.name}\nТеперь выберите товар:
     await callback.answer()
 
 
@@ -108,9 +112,10 @@ async def product_chosen(callback: types.CallbackQuery, callback_data: ProductCa
 
     await state.set_state(DeliveryState.weight_plan)
     await callback.message.edit_text(
-        f"📦 Товар: <b>{product.name}</b>\nВведите план (в {product.unit}):",
+        f"📦 Mahsulot: <b>{product.name}</b>\nMahsulot: ({product.unit}da):",
         parse_mode="HTML"
     )
+    # f"📦 Товар: <b>{product.name}</b>\nВведите план (в {product.unit}):"
     await callback.answer()
 
 
@@ -123,21 +128,28 @@ async def delivery_plan_chosen(message: types.Message, state: FSMContext):
         weight = float(message.text.replace(',', '.'))
         await state.update_data(weight_plan=weight)
         await state.set_state(DeliveryState.weight_fact)
-        await message.answer(f"План {weight} {unit} принят.\nВведите <b>фактический вес/кол-во</b>:")
+        await message.answer(
+            f"{weight} {unit} reja qabul qilindi.\n<b>Haqiqiy vazn/miqdorni</b> kiriting:",
+            parse_mode="HTML"
+        )
+
+        #f"План {weight} {unit} принят.\nВведите <b>фактический вес/кол-во</b>:"
     except ValueError:
-        await message.answer(f"Ошибка! Введите число ({unit}). Пример: 15.5")
+        await message.answer(f"Xato! Son kiriting ({unit}). Misol uchun: 15.5")
+        # f"Ошибка! Введите число ({unit}). Пример: 15.5"
 
 
 # 5. Ввод ФАКТА и сохранение в базу (Snapshot)
-# 5. Ввод ФАКТА и сохранение в базу (Snapshot)
-@router.message(DeliveryState.weight_fact, F.text, ~F.text.contains("Завершить"))
+@router.message(DeliveryState.weight_fact, F.text, ~F.text.contains("Yakunlash")) #Завершить
 async def delivery_fact_chosen(message: types.Message, state: FSMContext, session: AsyncSession):
     data = await state.get_data()
     unit = data.get('unit', 'кг')
     try:
         weight_fact = float(message.text.replace(',', '.'))
         if weight_fact > data['weight_plan']:
-            await message.answer(f"❌ Факт не может быть больше плана ({data['weight_plan']} {unit}). Введите заново:")
+            await message.answer(f"❌ Haqiqiy miqdor rejadan ko'p bo'lishi mumkin emas ({data['weight_plan']} {unit}). "
+                                 f"Qaytadan kiriting:")
+            #f"❌ Факт не может быть больше плана ({data['weight_plan']} {unit}). Введите заново:"
             return
 
         # Сохраняем отгрузку
@@ -154,12 +166,15 @@ async def delivery_fact_chosen(message: types.Message, state: FSMContext, sessio
         # ----------------------
 
         await message.answer(
-            f"✅ Сохранено: {data['prod_name']}\n"
-            f"Сумма: <b>{delivery.total_price_sadik:,} сум</b>\n\n"
-            "Добавить ещё товар в этот садик?",
+            f"✅ Saqlandi: {data['prod_name']}\n"
+            f"Summa: <b>{delivery.total_price_sadik:,} сум</b>\n\n"
+            "Ushbu bog'chaga yana mahsulot qo'shasizmi?",
             reply_markup=get_loop_kb(),
             parse_mode="HTML"
         )
+        # f"✅ Сохранено: {data['prod_name']}\n"
+        # f"Сумма: <b>{delivery.total_price_sadik:,} сум</b>\n\n"
+        # "Добавить ещё товар в этот садик?",
     except ValueError:
         await message.answer(f"Ошибка! Введите число ({unit}).")
 
@@ -170,7 +185,7 @@ async def add_more_product(callback: types.CallbackQuery, state: FSMContext, ses
 
     # ПРОВЕРКА: Если садик потерялся (например, при редактировании)
     if 'kindergarten_id' not in data:
-        await callback.answer("Сначала выберите садик")
+        await callback.answer("Avval bog'chani tanlang") # Сначала выберите садик
         await show_kindergartens(callback.message, state, session)
         return
 
@@ -179,9 +194,10 @@ async def add_more_product(callback: types.CallbackQuery, state: FSMContext, ses
     from database.requests import get_all_products
     products = await get_all_products(session)
     await callback.message.edit_text(
-        "Выберите товар:",
+        "Mahsulotni tanlang:",
         reply_markup=get_products_paging_kb(products, page=0)
     )
+    # Выберите товар:
 
 
 @router.callback_query(F.data == "finish_this_kg")
@@ -202,15 +218,17 @@ async def finish_kg(callback: types.CallbackQuery, state: FSMContext, session: A
     deliveries = result.scalars().all()
 
     if not deliveries:
-        await callback.message.answer("В этот садик ничего не было отгружено.", reply_markup=main_menu_kb())
+        await callback.message.answer("Ushbu bog'chaga hech narsa yetkazilmadi.", reply_markup=main_menu_kb())
+        # В этот садик ничего не было отгружено.
     else:
-        report = f"🏁 <b>Итог по объекту: {kg_name}</b>\n\n"
+        report = f"🏁 <b>Obyekt bo'yicha yakun: {kg_name}</b>\n\n" # 🏁 Итог по объекту: {kg_name}
         total_kg_sum = 0
         for d in deliveries:
-            report += f"🔹 {d.product.name}: {d.weight_fact} {d.product.unit} — <b>{d.total_price_sadik:,} сум</b>\n"
+            report += f"🔹 {d.product.name}: {d.weight_fact} {d.product.unit} — <b>{d.total_price_sadik:,} so'm</b>\n"
+            # сум
             total_kg_sum += d.total_price_sadik
 
-        report += f"\n💰 <b>Итого к оплате: {total_kg_sum:,} сум</b>"
+        report += f"\n💰 <b>To'lov uchun jami: {total_kg_sum:,} so'm</b>" # 💰 Итого к оплате:
         await callback.message.answer(report, reply_markup=main_menu_kb(), parse_mode="HTML")
 
     # 3. Полная очистка стейта только в самом конце
@@ -220,13 +238,13 @@ async def finish_kg(callback: types.CallbackQuery, state: FSMContext, session: A
 
 from keyboards.reply import main_menu_kb  # убедись, что импорт есть
 
-@router.message(F.text == "🏁 Завершить смену")
+@router.message(F.text == "🏁 Smenani yopish") # 🏁 Завершить смену
 async def close_shift_button_handler(message: types.Message, state: FSMContext, session: AsyncSession):
     await close_shift_start(message, state, session)
 
 
 # 1. Начало закрытия смены (обработка и кнопки, и инлайна)
-@router.message(F.text == "🏁 Завершить смену")
+@router.message(F.text == "🏁 Smenani yopish")
 async def close_shift_start(message: types.Message, state: FSMContext, session: AsyncSession,
                             manual_user_id: int = None):
     # Если manual_user_id передан (из инлайна), берем его. Иначе из сообщения.
@@ -237,7 +255,7 @@ async def close_shift_start(message: types.Message, state: FSMContext, session: 
     shift = await requests.get_active_shift(session, user.id)
 
     if not shift:
-        await message.answer("У вас нет открытых смен.")
+        await message.answer("Sizda ochiq smenalar yo'q.") # До: У вас нет открытых смен.
         return
 
     await state.update_data(shift_id=shift.id)
@@ -245,15 +263,17 @@ async def close_shift_start(message: types.Message, state: FSMContext, session: 
 
     # Создаем временную кнопку для быстрого ввода 0
     kb = types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton(text="0 (не заправлялся)")]],
+        keyboard=[[types.KeyboardButton(text="0 (yoqilg'i quyilmadi)")]], # До: 0 (не заправлялся)
         resize_keyboard=True
     )
 
     await message.answer(
-        "Введите сумму расхода на бензин за сегодня (сум).\n"
-        "Если расходов не было, введите 0 или нажмите кнопку ниже:",
+        "Bugungi benzin xarajatini kiriting (so'mda).\n"
+        "Agar xarajat bo'lmagan bo'lsa, 0 kiriting yoki pastdagi tugmani bosing:",
         reply_markup=kb
     )
+    # "Введите сумму расхода на бензин за сегодня (сум).\n"
+    #  "Если расходов не было, введите 0 или нажмите кнопку ниже:"
 
 
 @router.message(DeliveryState.waiting_fuel)
@@ -271,10 +291,11 @@ async def close_shift_done(message: types.Message, state: FSMContext, session: A
         if not deliveries:
             await requests.close_shift(session, shift_id, fuel_amount)
             await state.clear()
-            await message.answer("🏁 Смена закрыта. Отгрузок сегодня не было.", reply_markup=main_menu_kb(user.is_admin))
+            await message.answer("🏁 Smena yopildi. Bugun yetkazib berishlar bo'lmadi.", reply_markup=main_menu_kb(user.is_admin))
+            # 🏁 Смена закрыта. Отгрузок сегодня не было.
             return
 
-        report = "📝 <b>ИТОГ ВАШЕЙ СМЕНЫ:</b>\n\n"
+        report = "📝 <b>ISH KUNINGIZ YAKUNI:</b>\n\n" # 📝 ИТОГ ВАШЕЙ СМЕНЫ:
         kg_data = {}
         total_shift_sum = 0
 
@@ -298,11 +319,11 @@ async def close_shift_done(message: types.Message, state: FSMContext, session: A
         # Считаем чистую сумму прямо здесь для текста
         final_net_amount = total_shift_sum - fuel_amount
 
-        report += f"💰 Общая выручка: {total_shift_sum:,} сум\n"
-        report += f"⛽ Бензин: -{fuel_amount:,} сум\n"
-        report += "───────────────────\n"
-        report += f"💵 <b>ИТОГО К ВЫДАЧЕ: {final_net_amount:,} сум</b>\n\n"  # Теперь водитель видит разницу
-        report += "🏁 Смена закрыта. Хорошего отдыха!"
+        report += f"💰 Umumiy tushum: {total_shift_sum:,} so'm\n" # 💰 Общая выручка: {total_shift_sum:,} сум
+        report += f"⛽ Benzin: -{fuel_amount:,} so'm\n" # Бензин
+        report += "───────────────────\n" #ИТОГО К ВЫДАЧЕ:
+        report += f"💵 <b>TOPSHIRILADIGAN JAMI SUMMA: {final_net_amount:,} so'm</b>\n\n"  #Теперь водитель видит разницу
+        report += "🏁 Smena yopildi. Maroqli hordiq chiqaring!" # "🏁 Смена закрыта. Хорошего отдыха!"
         # ----------------------------
 
         await requests.close_shift(session, shift_id, fuel_amount)
@@ -311,7 +332,8 @@ async def close_shift_done(message: types.Message, state: FSMContext, session: A
         await message.answer(report, reply_markup=main_menu_kb(user.is_admin), parse_mode="HTML")
 
     except ValueError:
-        await message.answer("Ошибка! Введите сумму расхода цифрами (например: 50000) или 0.")
+        # Ошибка! Введите сумму расхода цифрами (например: 50000) или 0.
+        await message.answer("Xato! Xarajat summasini raqamlar bilan kiriting (masalan: 50000) yoki 0")
 # Показываем садики, которые уже ввел водитель в этой смене
 @router.callback_query(F.data == "manage_current_shift")
 async def manage_current(callback: types.CallbackQuery, session: AsyncSession):
@@ -320,18 +342,19 @@ async def manage_current(callback: types.CallbackQuery, session: AsyncSession):
     deliveries = await requests.get_shift_deliveries(session, shift.id)
 
     if not deliveries:
-        await callback.answer("В этой смене еще нет записей.", show_alert=True)
+        await callback.answer("Ushbu smenada hali yozuvlar yo'q.", show_alert=True) # В этой смене еще нет записей.
         return
 
     kgs = {d.kindergarten.id: d.kindergarten.name for d in deliveries}
 
     builder = InlineKeyboardBuilder()
     for kg_id, kg_name in kgs.items():
-        builder.button(text=f"❌ Удалить {kg_name}", callback_data=f"del_kg_curr:{kg_id}")
+        builder.button(text=f"❌ {kg_name}ni o'chirish", callback_data=f"del_kg_curr:{kg_id}") # f"❌ Удалить {kg_name}"
     builder.button(text="⬅️ Назад", callback_data="back_to_loop")  # Сделай хендлер для возврата к кнопкам петли
     builder.adjust(1)
 
-    await callback.message.edit_text("Выберите садик для удаления:", reply_markup=builder.as_markup())
+    await callback.message.edit_text("O'chirish uchun bog'chani tanlang:", reply_markup=builder.as_markup())
+    # Выберите садик для удаления:
 
 
 # Удаление садика
@@ -341,7 +364,7 @@ async def delete_kg_curr(callback: types.CallbackQuery, session: AsyncSession):
     user = await requests.get_user(session, callback.from_user.id)
     shift = await requests.get_or_create_shift(session, user.id)
     await requests.delete_kg_from_active_shift(session, shift.id, kg_id)
-    await callback.answer("Садик удален!", show_alert=True)
+    await callback.answer("Bog'cha o'chirildi!", show_alert=True) # "Садик удален!"
     await manage_current(callback, session)  # Обновляем список
 
 
@@ -349,7 +372,7 @@ async def delete_kg_curr(callback: types.CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data == "back_to_loop")
 async def back_to_loop_handler(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "Данные сохранены. Что делаем дальше?",
+        "Ma'lumotlar saqlandi. Keyingi qadam nima?", # Данные сохранены. Что делаем дальше?
         reply_markup=get_loop_kb()  # Твоя функция с 4-мя кнопками
     )
 
@@ -362,7 +385,7 @@ async def manage_current(callback: types.CallbackQuery, session: AsyncSession):
     deliveries = await requests.get_shift_deliveries(session, shift.id)
 
     if not deliveries:
-        await callback.answer("В этой смене пока пусто", show_alert=True)
+        await callback.answer("Bu smena hozircha bo'sh", show_alert=True) # В этой смене пока пусто
         return
 
     # Группируем садики
@@ -372,14 +395,15 @@ async def manage_current(callback: types.CallbackQuery, session: AsyncSession):
     for kg_id, kg_name in kgs.items():
         builder.button(text=f"🏫 {kg_name}", callback_data=f"view_kg_det:{kg_id}")
 
-    builder.button(text="⬅️ Назад", callback_data="back_to_loop")
+    builder.button(text="⬅️ Ortga", callback_data="back_to_loop") # ⬅️ Назад
     builder.adjust(1)
 
     await callback.message.edit_text(
-        "🔍 **Просмотр текущей смены:**\nВыберите садик, чтобы увидеть детали или удалить его.",
+        "🔍 **Joriy smenani ko'rish:**\nTafsilotlarni ko'rish yoki o'chirish uchun bog'chani tanlang.",
         reply_markup=builder.as_markup(),
         parse_mode="Markdown"
     )
+    # "🔍 **Просмотр текущей смены:**\nВыберите садик, чтобы увидеть детали или удалить его."
 
 
 # 3. Детали конкретного садика (Второй уровень просмотра)
@@ -393,23 +417,23 @@ async def view_kg_details(callback: types.CallbackQuery, session: AsyncSession):
     items = await requests.get_kg_deliveries_in_shift(session, shift.id, kg_id)
 
     if not items:
-        await callback.answer("Данные не найдены")
+        await callback.answer("Ma'lumotlar topilmadi") # Данные не найдены
         return
 
     kg_name = items[0].kindergarten.name
-    res_text = f"🏫 **Садик: {kg_name}**\n\n"
+    res_text = f"🏫 **Bog'cha: {kg_name}**\n\n" # Садик
     kg_total = 0
 
     for row in items:
         res_text += f"• {row.product.name}: {row.weight_fact} {row.product.unit} — {row.total_price_sadik:,} сум\n"
         kg_total += row.total_price_sadik
 
-    res_text += f"\n💰 **Итого по садику: {kg_total:,} сум**"
+    res_text += f"\n💰 **Bog'cha bo'yicha jami: {kg_total:,} so'm**" # f"\n💰 **Итого по садику: {kg_total:,} сум**"
 
     builder = InlineKeyboardBuilder()
     # Кнопка удаления именно этого садика
-    builder.button(text="🗑 Удалить этот садик", callback_data=f"del_kg_curr:{kg_id}")
-    builder.button(text="⬅️ Назад к списку", callback_data="manage_current_shift")
+    builder.button(text="🗑 Ushbu bog'chani o'chirish", callback_data=f"del_kg_curr:{kg_id}") # До: 🗑 Удалить этот садик
+    builder.button(text="⬅️ Ro'yxatga qaytish", callback_data="manage_current_shift") # До: ⬅️ Назад к списку
     builder.adjust(1)
 
     await callback.message.edit_text(res_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
@@ -425,7 +449,7 @@ async def delete_kg_curr(callback: types.CallbackQuery, session: AsyncSession):
     # Твоя исправленная колонка kindergarten_id
     await requests.delete_kg_from_active_shift(session, shift.id, kg_id)
 
-    await callback.answer("Садик полностью удален из смены", show_alert=True)
+    await callback.answer("Bog'cha smenadan butunlay o'chirildi", show_alert=True) # Садик полностью удален из смены
     # Возвращаем водителя к списку оставшихся садиков
     await manage_current(callback, session)
 
@@ -446,10 +470,11 @@ async def manage_current(callback: types.CallbackQuery, session: AsyncSession):
 
     # Вызываем твой инлайн из inline.py
     await callback.message.edit_text(
-        "🔍 **Просмотр текущей смены:**\nВыберите садик для деталей или удаления.",
+        "🔍 **Joriy smenani ko'rish:**\nTafsilotlarni ko'rish yoki o'chirish uchun bog'chani tanlang.",
         reply_markup=inline.get_manage_current_kb(kgs),
         parse_mode="Markdown"
     )
+    # "🔍 **Просмотр текущей смены:**\nВыберите садик для деталей или удаления."
 
 
 # 2. Детали садика и кнопка "Удалить"
@@ -463,18 +488,18 @@ async def view_kg_details(callback: types.CallbackQuery, session: AsyncSession):
     items = await requests.get_kg_deliveries_in_shift(session, shift.id, kg_id)
 
     kg_name = items[0].kindergarten.name
-    res_text = f"🏫 **Садик: {kg_name}**\n\n"
+    res_text = f"🏫 **Bog'cha: {kg_name}**\n\n" # Садик
     kg_total = 0
     for row in items:
-        res_text += f"• {row.product.name}: {row.weight_fact} {row.product.unit} — {row.total_price_sadik:,} сум\n"
+        res_text += f"• {row.product.name}: {row.weight_fact} {row.product.unit} — {row.total_price_sadik:,} so'm\n"
         kg_total += row.total_price_sadik
 
-    res_text += f"\n💰 **Итого: {kg_total:,} сум**"
+    res_text += f"\n💰 **Jami: {kg_total:,} so'm**"
 
     # Вызываем клавиатуру удаления
     builder = InlineKeyboardBuilder()
-    builder.button(text="🗑 Удалить этот садик", callback_data=f"del_kg_curr:{kg_id}")
-    builder.button(text="⬅️ Назад", callback_data="manage_current_shift")
+    builder.button(text="🗑 Ushbu bog'chani o'chirish", callback_data=f"del_kg_curr:{kg_id}") # До: 🗑 Удалить этот садик
+    builder.button(text="⬅️ Ortga", callback_data="manage_current_shift") # До: ⬅️ Назад
     builder.adjust(1)
 
     await callback.message.edit_text(res_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
@@ -488,7 +513,7 @@ async def delete_kg_curr(callback: types.CallbackQuery, session: AsyncSession):
     shift = await requests.get_active_shift(session, user.id)
 
     await requests.delete_kg_from_active_shift(session, shift.id, kg_id)
-    await callback.answer("Садик удален!", show_alert=True)
+    await callback.answer("Bog'cha o'chirildi!", show_alert=True) # Садик удален!
     await manage_current(callback, session)  # Возвращаем к списку
 
 
@@ -496,9 +521,9 @@ async def delete_kg_curr(callback: types.CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data == "back_to_loop")
 async def back_to_loop(callback: types.CallbackQuery):
     await callback.message.edit_text(
-        "Что делаем дальше?",
+        "Keyingi qadam nima?",
         reply_markup=get_loop_kb()  # Твоя функция из inline.py
-    )
+    ) # Что делаем дальше?
 
 
 # Обработка инлайн-кнопки "Завершить смену" из петли
@@ -525,12 +550,15 @@ async def finalize_update_date(callback: types.CallbackQuery, state: FSMContext,
 
     # Возвращаем его к кнопкам "петли"
     await callback.message.edit_text(
-        f"✅ Дата всей смены изменена на **{new_date.strftime('%d.%m.%Y')}**.\n"
-        f"Все введенные товары сохранены под этим числом.\n\n"
-        f"Что делаем дальше?",
+        f"✅ Дата всей смены изменена на **{new_date.strftime('%d.%m.%Y')}**ga o'zgartirildi.\n"
+        f"Barcha kiritilgan mahsulotlar ushbu sana bilan saqlandi.\n\n"
+        f"Keyingi qadam nima?",
         reply_markup=get_loop_kb(),  # Та самая клавиатура с новой кнопкой
         parse_mode="Markdown"
     )
+    #f"✅ Дата всей смены изменена на **{new_date.strftime('%d.%m.%Y')}**.\n"
+    #    f"Все введенные товары сохранены под этим числом.\n\n"
+    #    f"Что делаем дальше?"
 
 
 # 1. Показываем выбор даты
@@ -540,17 +568,19 @@ async def change_date_request(callback: types.CallbackQuery):
     today = datetime.now().strftime("%d.%m")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%d.%m")
 
-    builder.button(text=f"📅 Сегодня ({today})", callback_data="apply_new_date:today")
-    builder.button(text=f"📅 Вчера ({yesterday})", callback_data="apply_new_date:yesterday")
-    builder.button(text="⬅️ Назад", callback_data="back_to_loop")
+    builder.button(text=f"📅 Bugun ({today})", callback_data="apply_new_date:today") # 📅 Сегодня
+    builder.button(text=f"📅 Kecha ({yesterday})", callback_data="apply_new_date:yesterday") # 📅 Вчера
+    builder.button(text="⬅️ Ortga", callback_data="back_to_loop") # ⬅️ Назад
     builder.adjust(1)
 
     await callback.message.edit_text(
-        "Вы ошиблись датой? Выберите правильную дату для этой смены.\n"
-        "**Все введенные садики сохранятся!**",
+        "Sanada adashtingizmi? Ushbu smena uchun to'g'ri sanani tanlang.\n"
+        "**Kiritilgan barcha bog'chalar saqlanib qoladi!**",
         reply_markup=builder.as_markup(),
         parse_mode="Markdown"
     )
+    # "Вы ошиблись датой? Выберите правильную дату для этой смены.\n"
+    #         "**Все введенные садики сохранятся!**"
 
 
 # 2. Применяем новую дату
@@ -567,14 +597,18 @@ async def apply_date_fix(callback: types.CallbackQuery, session: AsyncSession):
 
     if shift:
         await requests.update_shift_date(session, shift.id, new_date)
-        await callback.answer(f"Дата изменена на {new_date.strftime('%d.%m')}", show_alert=True)
+        await callback.answer(f"Sana {new_date.strftime('%d.%m')}ga o'zgartirildi", show_alert=True)
 
         await callback.message.edit_text(
-            f"✅ Дата всей смены изменена на **{new_date.strftime('%d.%m.%Y')}**.\n"
-            "Все данные успешно перенесены.\n\n"
-            "Что делаем дальше?",
+            f"✅ Butun smena sanasi **{new_date.strftime('%d.%m.%Y')}ga o'zgartirildi**.\n"
+            "Barcha kiritilgan mahsulotlar ushbu sana bilan saqlandi.\n\n"
+            "Keyingi qadam nima?",
             reply_markup=get_loop_kb(),
             parse_mode="Markdown"
         )
+        #f"✅ Дата всей смены изменена на **{new_date.strftime('%d.%m.%Y')}**.\n"
+        #    "Все данные успешно перенесены.\n\n"
+        #    "Что делаем дальше?",
     else:
-        await callback.answer("Ошибка: Активная смена не найдена", show_alert=True)
+        await callback.answer("Xato: Faol smena topilmadi", show_alert=True)
+        #"Ошибка: Активная смена не найдена"

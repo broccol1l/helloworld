@@ -17,7 +17,7 @@ router = Router()
 
 
 # 1. Список отчетов (Архив)
-@router.message(F.text == "📊 Мои отчеты")
+@router.message(F.text == "📊 Hisobotlarim")  # 📊 Мои отчеты
 @router.callback_query(F.data.startswith("rep_page:"))
 async def show_my_reports(event: types.Message | types.CallbackQuery, session: AsyncSession):
     # --- ИСПРАВЛЕННЫЙ БЛОК ОПРЕДЕЛЕНИЯ СТРАНИЦЫ ---
@@ -51,7 +51,7 @@ async def show_my_reports(event: types.Message | types.CallbackQuery, session: A
 
     # Если отчетов вообще нет в базе (даже на 0 странице)
     if not shifts:
-        text = "У вас пока нет закрытых отчетов."
+        text = "Sizda hali yopilgan hisobotlar yo'q." # "У вас пока нет закрытых отчетов."
         if isinstance(event, types.CallbackQuery):
             await event.message.edit_text(text)
             await event.answer()
@@ -62,8 +62,8 @@ async def show_my_reports(event: types.Message | types.CallbackQuery, session: A
     # 4. Получаем клавиатуру
     kb = inline.get_reports_paging_kb(shifts, page=page, limit=limit)
 
-    text = f"📂 **Ваш архив отчетов (стр. {page + 1}):**\nВыберите нужную дату."
-
+    text = f"📂 **Hisobotlar arxivi (стр. {page + 1}):**\nKerakli sanani tanlang."
+    #f"📂 **Ваш архив отчетов (стр. {page + 1}):**\nВыберите нужную дату."
     if isinstance(event, types.CallbackQuery):
         # Используем try/except на случай, если сообщение идентично
         try:
@@ -86,15 +86,16 @@ async def view_single_report(callback: types.CallbackQuery, session: AsyncSessio
     deliveries = await requests.get_shift_deliveries(session, shift_id)
 
     if not deliveries or not shift:
-        await callback.answer("Данные не найдены.", show_alert=True)
+        await callback.answer("Ma'lumotlar topilmadi.", show_alert=True) # Данные не найдены.
         return
 
-    report_text = f"📋 **Отчет за {shift.opened_at.strftime('%d.%m.%Y')}**\n\n"
+    report_text = f"📋 **{shift.opened_at.strftime('%d.%m.%Y')}sana uchun hisobot**\n\n"
+    # f"📋 **Отчет за {shift.opened_at.strftime('%d.%m.%Y')}**\n\n"
     total_sum = 0
     for d in deliveries:
         report_text += (
             f"🏫 {d.kindergarten.name}\n"
-            f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} = {d.total_price_sadik:,} сум\n"
+            f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} = {d.total_price_sadik:,} so'm\n"
         )
         total_sum += d.total_price_sadik
 
@@ -102,9 +103,9 @@ async def view_single_report(callback: types.CallbackQuery, session: AsyncSessio
     fuel = shift.fuel_expense or 0  # Берем бензин (если там NULL, то 0)
     final_amount = total_sum - fuel  # Вычитаем из общей суммы товаров бензин
 
-    report_text += f"\n⛽ Бензин: **{fuel:,} сум**"
-    report_text += f"\n💰 **ОБЩАЯ ВЫРУЧКА: {total_sum:,} сум**"
-    report_text += f"\n💵 **ИТОГО К ВЫДАЧЕ: {final_amount:,} сум**"  # Выводим чистый итог
+    report_text += f"\n⛽ Benzin: **{fuel:,} so'm**" #f"\n⛽ Бензин: **{fuel:,} сум**"
+    report_text += f"\n💰 **UMUMIY TUSHUM: {total_sum:,} so'm**" #f"\n💰 **ОБЩАЯ ВЫРУЧКА: {total_sum:,} сум**"
+    report_text += f"\n💵 **TOPSHIRILADIGAN JAMI SUMMA: {final_amount:,} so'm**" #f"\n💵 **ИТОГО К ВЫДАЧЕ: {final_amount:,} сум**"
     # ---------------------------------
 
     kb = inline.get_report_details_kb(shift_id)
@@ -115,7 +116,7 @@ async def view_single_report(callback: types.CallbackQuery, session: AsyncSessio
 async def delete_report_final(callback: types.CallbackQuery, session: AsyncSession):
     shift_id = int(callback.data.split(":")[1])
     await requests.delete_shift_full(session, shift_id)
-    await callback.answer("🚨 Отчет полностью удален!", show_alert=True)
+    await callback.answer("🚨 Hisobot butunlay o'chirildi!", show_alert=True) # 🚨 Отчет полностью удален!
 
     # Теперь при этом вызове show_my_reports увидит префикс "del_rep",
     # поймет, что это не пагинация, и просто откроет первую страницу.
@@ -129,7 +130,8 @@ async def edit_old_report(callback: types.CallbackQuery, state: FSMContext, sess
 
     active_shift = await requests.get_active_shift(session, user_id)
     if active_shift and active_shift.id != shift_id:
-        await callback.answer("⚠️ Сначала завершите текущую смену!", show_alert=True)
+        await callback.answer("⚠️ Avval joriy smenani yakunlang!", show_alert=True)
+        #"⚠️ Сначала завершите текущую смену!"
         return
 
     await requests.unclose_shift(session, shift_id)
@@ -140,18 +142,20 @@ async def edit_old_report(callback: types.CallbackQuery, state: FSMContext, sess
 
     # Вместо get_loop_kb создаем специальное меню для начала правки
     builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Добавить товары в садик", callback_data="edit_start_add")
-    builder.button(text="🔍 Просмотр / Удалить садики", callback_data="manage_current_shift")
-    builder.button(text="🗓 Исправить дату смены", callback_data="change_shift_date_start")
-    builder.button(text="🏁 Завершить правки", callback_data="go_to_close_shift")
+    builder.button(text="➕ Bog'chaga mahsulot qo'shish", callback_data="edit_start_add") # ➕ Добавить товары в садик
+    builder.button(text="🔍 Ko'rish / Bog'chani o'chirish", callback_data="manage_current_shift") # 🔍 Просмотр / Удалить садики
+    builder.button(text="🗓 Smena sanasini tuzatish", callback_data="change_shift_date_start") # 🗓 Исправить дату смены
+    builder.button(text="🏁 Tuzatishlarni yakunlash", callback_data="go_to_close_shift") # 🏁 Завершить правки
     builder.adjust(1)
 
     await callback.message.edit_text(
-        "🛠 **Режим редактирования отчета**\n\n"
-        "Выберите, что вы хотите сделать:",
+        "🛠 **Hisobotni tahrirlash rejimi**\n\n"
+        "Nima qilishni xohlaysiz, tanlang:",
         reply_markup=builder.as_markup(),
         parse_mode="Markdown"
     )
+    # "🛠 **Режим редактирования отчета**\n\n"
+    #         "Выберите, что вы хотите сделать:"
     await callback.answer()
 
 
@@ -168,10 +172,10 @@ async def handle_export_xlsx(callback: types.CallbackQuery, session: AsyncSessio
     shift = await requests.get_shift_full_details(session, shift_id)
 
     if not shift or not shift.deliveries:
-        await callback.answer("Данные не найдены", show_alert=True)
+        await callback.answer("Ma'lumotlar topilmadi.", show_alert=True) # Данные не найдены"
         return
 
-    await callback.answer("⏳ Генерирую Excel...")
+    await callback.answer("⏳ Excel tayyorlanyapti...") # ⏳ Генерирую Excel...
 
     # Проверяем админа
     user = await requests.get_user(session, callback.from_user.id)
@@ -182,8 +186,9 @@ async def handle_export_xlsx(callback: types.CallbackQuery, session: AsyncSessio
 
     await callback.message.answer_document(
         document,
-        caption=f"📗 Excel-отчет за {shift.opened_at.strftime('%d.%m.%Y')}"
+        caption=f"📗 {shift.opened_at.strftime('%d.%m.%Y')} sana uchun Excel-hisobot"
     )
+    # 📗 Excel-отчет за {shift.opened_at.strftime('%d.%m.%Y')}
 
 
 @router.callback_query(F.data.startswith("export_pdf:"))
@@ -195,11 +200,12 @@ async def handle_export_pdf(callback: types.CallbackQuery, session: AsyncSession
     shift = await requests.get_shift_full_details(session, shift_id)
 
     if not shift or not shift.deliveries:
-        await callback.answer("Данные для этого отчета не найдены.", show_alert=True)
+        await callback.answer("Ushbu hisobot uchun ma'lumotlar topilmadi.", show_alert=True)
+        # "Данные для этого отчета не найдены."
         return
 
     # Уведомляем пользователя, что процесс пошел (чтобы он не тыкал кнопку дважды)
-    await callback.answer("⏳ Генерирую PDF-файл...")
+    await callback.answer("⏳ PDF-fayl tayyorlanyapti...") # "⏳ Генерирую PDF-файл..."
 
     # 3. Проверяем права пользователя (админ видит прибыль, водитель — нет)
     user = await requests.get_user(session, callback.from_user.id)
@@ -215,10 +221,11 @@ async def handle_export_pdf(callback: types.CallbackQuery, session: AsyncSession
         # 6. Отправляем PDF пользователю
         await callback.message.answer_document(
             document=document,
-            caption=f"📄 PDF-отчет за {shift.opened_at.strftime('%d.%m.%Y')}\nВодитель: {shift.driver.full_name}"
+            caption=f"📄 {shift.opened_at.strftime('%d.%m.%Y')} sana uchun PDF-hisobot\nHaydovchi: {shift.driver.full_name}"
         )
+        # f"📄 PDF-отчет за {shift.opened_at.strftime('%d.%m.%Y')}\nВодитель: {shift.driver.full_name}"
 
     except Exception as e:
         # Если что-то пошло не так (например, не нашелся шрифт), сообщаем об ошибке
-        await callback.message.answer(f"❌ Ошибка при создании PDF: {e}")
-        print(f"Ошибка PDF: {e}")  # Для отладки в консоли
+        await callback.message.answer(f"❌ PDF yaratishda xatolik: {e}") # f"❌ Ошибка при создании PDF: {e}"
+        print(f"PDF xatosi: {e}")  # Для отладки в консоли # f"Ошибка PDF: {e}"

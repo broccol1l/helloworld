@@ -6,7 +6,7 @@ from utils.constants import KINDERGARTENS
 def get_register_kb():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📱 Отправить контакт", request_contact=True)]
+            [KeyboardButton(text="📱 Raqamni yuborish", request_contact=True)]
         ],
         resize_keyboard=True,
         one_time_keyboard=True
@@ -19,19 +19,19 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 def main_menu_kb(is_admin: bool = False):
     # Основные кнопки для водителя
     buttons = [
-        [KeyboardButton(text="📦 Добавить отгрузку")],
-        [KeyboardButton(text="📊 Мои отчеты"), KeyboardButton(text="🏁 Завершить смену")],
-        [KeyboardButton(text="📝 Изменить имя")]
+        [KeyboardButton(text="📦 Yuk qo'shish")],#📦  Добавить отгрузку
+        [KeyboardButton(text="📊 Hisobotlarim"), KeyboardButton(text="🏁 Smenani yopish")],#📊  Мои отчеты"
+        [KeyboardButton(text="📝 Ismni o'zgartirish")]# 📝 Изменить имя"
     ]
 
     # Если зашел босс — добавляем кнопку управления
     if is_admin:
-        buttons.append([KeyboardButton(text="⚙️ Админ-панель")])
+        buttons.append([KeyboardButton(text="⚙️ Admin paneli")]) # ⚙️ Админ-панель
 
     return ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
-        input_field_placeholder="Выберите действие..."
+        input_field_placeholder="Amalni tanlang..." # Выберите действие...
     )
 
 def get_objects_kb():

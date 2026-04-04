@@ -15,16 +15,18 @@ async def cmd_start(message: types.Message, state: FSMContext, session: AsyncSes
     user = await requests.get_user(session, message.from_user.id)
 
     if user:
-        await message.answer(f"С возвращением, {user.full_name}!", reply_markup=main_menu_kb())
+        await message.answer(f"Xush kelibsiz, {user.full_name}!", reply_markup=main_menu_kb()) # С возвращением,
     else:
-        await message.answer("Привет! Вы не зарегистрированы в системе.\nВведите ваше Имя и Фамилию:")
+        await message.answer("Assalomu alaykum! Siz tizimdan ro'yxatdan o'tmagansiz.\nIsm va familiyangizni kiriting:")
+        # ("Привет! Вы не зарегистрированы в системе.\nВведите ваше Имя и Фамилию:")
         await state.set_state(Register.name)
 
 
 @router.message(Register.name)
 async def reg_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer("Теперь отправьте свой номер телефона", reply_markup=get_register_kb())
+    await message.answer("Endi telefon raqamingizni yuboring", reply_markup=get_register_kb())
+    # Теперь отправьте свой номер телефона
     await state.set_state(Register.phone)
 
 
@@ -45,15 +47,16 @@ async def reg_phone(message: types.Message, state: FSMContext, session: AsyncSes
 
     await state.clear()
     await message.answer(
-        f"Регистрация завершена!\nИмя: {data['name']}\nТел: {user_phone}",
+        f"Ro'yxatdan o'tish yakunlandi!\nIsm: {data['name']}\nTel: {user_phone}",
         reply_markup=main_menu_kb()
     )
+    #f"Регистрация завершена!\nИмя: {data['name']}\nТел: {user_phone}"
 
 
 # Хендлер нажатия на кнопку "Изменить имя"
-@router.message(F.text == "📝 Изменить имя")
+@router.message(F.text == "📝 Ismni o'zgartirish") # 📝 Изменить имя
 async def edit_name_start(message: types.Message, state: FSMContext):
-    await message.answer("Введите ваше новое Имя и Фамилию:")
+    await message.answer("Yangi ism va familiyangizni kiriting:") # Введите ваше новое Имя и Фамилию:
     await state.set_state(EditName.name)
 
 
@@ -73,6 +76,7 @@ async def edit_name_finish(message: types.Message, state: FSMContext, session: A
     await session.commit()
 
     await state.clear()
-    await message.answer(f"✅ Готово! Теперь я буду называть вас: **{new_name}**",
+    await message.answer(f"✅ Tayyor! Endi sizni shunday chaqiraman: **{new_name}**",
                          reply_markup=main_menu_kb(),
                          parse_mode="Markdown")
+    # ✅ Готово! Теперь я буду называть вас: {new_name}
