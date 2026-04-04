@@ -1040,7 +1040,9 @@ async def admin_change_fuel_start(callback: types.CallbackQuery, state: FSMConte
 async def admin_change_fuel_process(message: types.Message, state: FSMContext, session: AsyncSession):
     try:
         # Пробуем перевести текст в число
-        new_fuel = float(message.text.replace(',', '.'))
+        # new_fuel = float(message.text.replace(',', '.')) LAST SAVE
+        clean_text = message.text.replace('.', '').replace(',', '')
+        new_fuel = float(clean_text)
     except ValueError:
         await message.answer("⚠️ Xato! Summani faqat raqamlarda kiriting.")
         # ⚠️ Ошибка! Введите сумму только цифрами.
@@ -1062,10 +1064,11 @@ async def admin_change_fuel_process(message: types.Message, state: FSMContext, s
     # Сообщаем об успехе и возвращаем кнопки редактирования
     from keyboards.inline import get_admin_edit_loop_kb
     await message.answer(
-        f"✅ Benzin xarajati **{new_fuel:,} so'm**ga yangilandi.\n\nKeyingi qadam nima?",
+        f"✅ Benzin xarajati **{int(new_fuel):,} so'm**ga yangilandi.\n\nKeyingi qadam nima?",
         reply_markup=get_admin_edit_loop_kb(shift_id),
         parse_mode="Markdown"
     )
+    # LAST SAVE {new_fuel:,}
     # ✅ Расход на бензин обновлен на... Что делаем дальше?
 
 
