@@ -1077,7 +1077,10 @@ async def admin_stats_main(callback: types.CallbackQuery, session: AsyncSession)
     # 1. Считаем количество записей в базе (твой старый код)
     users_count = await session.scalar(select(func.count(User.id)))
     products_count = await session.scalar(select(func.count(Product.id)))
-    kg_count = await session.scalar(select(func.count(Kindergarten.id)))
+    # kg_count = await session.scalar(select(func.count(Kindergarten.id))) # LAST SAVE
+    kg_count = await session.scalar(
+        select(func.count(Kindergarten.id)).where(Kindergarten.is_active == True)
+    )
 
     # 2. Формируем текст: Сначала общая стата, потом призыв выбрать период
     text = (
