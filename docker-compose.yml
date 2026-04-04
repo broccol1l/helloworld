@@ -24,7 +24,7 @@ services:
       - .env
     volumes:
       - ./temp:/app/temp
-      - ./Fonts:/app/Fonts
+      - ./fonts:/app/fonts
 
 volumes:
   postgres_data:

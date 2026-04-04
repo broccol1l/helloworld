@@ -1679,7 +1679,7 @@ async def admin_export_universal_pdf(callback: types.CallbackQuery, session: Asy
     pdf = FPDF(orientation="L")
     pdf.add_page()
 
-    font_path = "Fonts/arial.ttf"
+    font_path = "fonts/arial.ttf"
     if not os.path.exists(font_path):
         await callback.message.answer(f"❌ '{font_path}' shrifti topilmadi.")
         # f"❌ Шрифт '{font_path}' не найден."
