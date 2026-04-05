@@ -76,7 +76,7 @@ async def show_my_reports(event: types.Message | types.CallbackQuery, session: A
 
 
 # 2. Просмотр конкретного отчета (Детализация)
-@router.callback_query(F.data.startswith("view_rep:"))
+@router.callback_query(F.data.startswith("view_rep:")) # НА СЕРВАК
 async def view_single_report(callback: types.CallbackQuery, session: AsyncSession):
     shift_id = int(callback.data.split(":")[1])
 
@@ -86,27 +86,37 @@ async def view_single_report(callback: types.CallbackQuery, session: AsyncSessio
     deliveries = await requests.get_shift_deliveries(session, shift_id)
 
     if not deliveries or not shift:
-        await callback.answer("Ma'lumotlar topilmadi.", show_alert=True) # Данные не найдены.
+        await callback.answer("Ma'lumotlar topilmadi.", show_alert=True)
         return
 
-    report_text = f"📋 **{shift.opened_at.strftime('%d.%m.%Y')}sana uchun hisobot**\n\n"
-    # f"📋 **Отчет за {shift.opened_at.strftime('%d.%m.%Y')}**\n\n"
+    report_text = f"📋 **{shift.opened_at.strftime('%d.%m.%Y')} sana uchun hisobot**\n\n"
     total_sum = 0
     for d in deliveries:
         report_text += (
             f"🏫 {d.kindergarten.name}\n"
-            f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} = {d.total_price_sadik:,} so'm\n"
+            f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} = {int(d.total_price_sadik):,} so'm\n"
         )
         total_sum += d.total_price_sadik
 
-    # --- ВОТ ТУТ ГЛАВНОЕ ИЗМЕНЕНИЕ ---
-    fuel = shift.fuel_expense or 0  # Берем бензин (если там NULL, то 0)
-    final_amount = total_sum - fuel  # Вычитаем из общей суммы товаров бензин
+    # Вынимаем данные из новых колонок
+    fuel = shift.fuel_expense or 0
+    other_exp = shift.other_expenses or 0
+    other_comment = shift.other_expenses_comment or ""
 
-    report_text += f"\n⛽ Benzin: **{fuel:,} so'm**" #f"\n⛽ Бензин: **{fuel:,} сум**"
-    report_text += f"\n💰 **UMUMIY TUSHUM: {total_sum:,} so'm**" #f"\n💰 **ОБЩАЯ ВЫРУЧКА: {total_sum:,} сум**"
-    report_text += f"\n💵 **TOPSHIRILADIGAN JAMI SUMMA: {final_amount:,} so'm**" #f"\n💵 **ИТОГО К ВЫДАЧЕ: {final_amount:,} сум**"
-    # ---------------------------------
+    # Итоговый расчет
+    total_expenses = fuel + other_exp
+    final_amount = total_sum - total_expenses
+
+    report_text += f"\n💰 **UMUMIY TUSHUM: {int(total_sum):,} so'm**"
+    report_text += f"\n⛽ Benzin: **-{int(fuel):,} so'm**"
+
+    # Показываем другие расходы, только если они больше нуля
+    if other_exp > 0:
+        comment_str = f" ({other_comment})" if other_comment else ""
+        report_text += f"\n🛠 Boshqa xarajatlar: **-{int(other_exp):,} so'm**{comment_str}"
+
+    report_text += "\n───────────────────"
+    report_text += f"\n💵 **TOPSHIRILADIGAN JAMI SUMMA: {int(final_amount):,} so'm**"
 
     kb = inline.get_report_details_kb(shift_id)
     await callback.message.edit_text(report_text, reply_markup=kb, parse_mode="Markdown")

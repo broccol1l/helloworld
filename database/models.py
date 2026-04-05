@@ -54,6 +54,9 @@ class Shift(Base):
     is_closed = Column(Boolean, default=False)
     fuel_expense = Column(Float, default=0.0)
 
+    other_expenses = Column(Float, default=0.0)
+    other_expenses_comment = Column(String, nullable=True)
+
     driver = relationship("User", back_populates="shifts")
     deliveries = relationship("Delivery", back_populates="shift")
 

@@ -22,25 +22,25 @@ else:
 
 
 # --- EXCEL GENERATION ---
-def create_shift_excel(shift, is_admin=False):
+def create_shift_excel(shift, is_admin=False): # НА СЕРВАК
     sorted_deliveries = sorted(shift.deliveries, key=lambda x: x.id)
     data = []
 
     for d in sorted_deliveries:
-        diff = d.weight_fact - d.weight_plan  # Считаем разницу
+        diff = d.weight_fact - d.weight_plan
         row = {
-            "Bog'cha": d.kindergarten.name,           # Садик
-            "Mahsulot": d.product.name,               # Товар
-            "Birl.": d.product.unit,                  # Ед.
-            "Reja": d.weight_plan,                    # План
-            "Fakt": d.weight_fact,                    # Факт
-            "Farq": diff,                             # Разница
-            "Narxi": d.p_sadik_fact,                  # Цена
-            "Summa": d.total_price_sadik              # Сумма
+            "Bog'cha": d.kindergarten.name,
+            "Mahsulot": d.product.name,
+            "Birl.": d.product.unit,
+            "Reja": d.weight_plan,
+            "Fakt": d.weight_fact,
+            "Farq": diff,
+            "Narxi": int(d.p_sadik_fact),
+            "Summa": int(d.total_price_sadik)
         }
         if is_admin:
-            row["Xarid"] = d.p_zakup_fact  # Закуп
-            row["Foyda"] = d.net_profit  # Прибыль
+            row["Xarid"] = int(d.p_zakup_fact)
+            row["Foyda"] = int(d.net_profit)
         data.append(row)
 
     df = pd.DataFrame(data)
@@ -62,28 +62,46 @@ def create_shift_excel(shift, is_admin=False):
         total_rev = sum(d.total_price_sadik for d in shift.deliveries)
         fuel = shift.fuel_expense or 0
 
-        ws.cell(row=last_row, column=1, value="ОБЩАЯ ВЫРУЧКА:") # ОБЩАЯ ВЫРУЧКА
-        ws.cell(row=last_row, column=2, value=total_rev)
-        ws.cell(row=last_row + 1, column=1, value="BENZIN:") # БЕНЗИН
-        ws.cell(row=last_row + 1, column=2, value=fuel)
+        # --- НОВЫЕ ДАННЫЕ ---
+        other_exp = shift.other_expenses or 0
+        other_comment = shift.other_expenses_comment or ""
+        total_expenses = fuel + other_exp
+        # --------------------
+
+        ws.cell(row=last_row, column=1, value="UMUMIY TUSHUM (ВЫРУЧКА):")
+        ws.cell(row=last_row, column=2, value=int(total_rev))
+
+        ws.cell(row=last_row + 1, column=1, value="BENZIN XARAJATI:")
+        ws.cell(row=last_row + 1, column=2, value=int(fuel))
+
+        # Добавляем строку прочих расходов, если они были
+        if other_exp > 0:
+            comment_text = f" ({other_comment})" if other_comment else ""
+            ws.cell(row=last_row + 2, column=1, value=f"BOSHQA XARAJATLAR{comment_text}:")
+            ws.cell(row=last_row + 2, column=2, value=int(other_exp))
+            summary_offset = 3  # Сдвигаем финальную строку ниже
+        else:
+            summary_offset = 2
 
         if is_admin:
             total_cost = sum(d.total_cost_zakup for d in shift.deliveries)
-            ws.cell(row=last_row + 2, column=1, value="SOF FOYDA:")
-            ws.cell(row=last_row + 2, column=2, value=total_rev - total_cost - fuel)
+            ws.cell(row=last_row + summary_offset, column=1, value="SOF FOYDA (ЧИСТАЯ ПРИБЫЛЬ):")
+            # Вычитаем и закуп, и все расходы водителя
+            ws.cell(row=last_row + summary_offset, column=2, value=int(total_rev - total_cost - total_expenses))
         else:
-            ws.cell(row=last_row + 2, column=1, value="TOPSHIRILADIGAN JAMI SUMMA:")
-            ws.cell(row=last_row + 2, column=2, value=total_rev - fuel)
+            ws.cell(row=last_row + summary_offset, column=1, value="TOPSHIRILADIGAN JAMI SUMMA:")
+            # Вычитаем бензин и другие расходы из выручки
+            ws.cell(row=last_row + summary_offset, column=2, value=int(total_rev - total_expenses))
 
-        # Ширина колонок
-        ws.column_dimensions['A'].width = 25
+        # Ширина колонок для красоты
+        ws.column_dimensions['A'].width = 35  # Увеличил, чтобы коммент влез
         ws.column_dimensions['B'].width = 20
 
     return file_path
 
 
 # --- PDF GENERATION ---
-def create_shift_pdf(shift, is_admin=False):
+def create_shift_pdf(shift, is_admin=False): # НА СЕРВАК
     os.makedirs("temp", exist_ok=True)
     suffix = "ADMIN" if is_admin else "HAYDOVCHI"
     file_path = os.path.join("temp", f"Hisobot_{suffix}_{shift.id}.pdf")
@@ -100,7 +118,7 @@ def create_shift_pdf(shift, is_admin=False):
     elements.append(Paragraph(header_text, ParagraphStyle('H', fontName=FONT_NAME, fontSize=10)))
     elements.append(Spacer(1, 15))
 
-    # Заголовки (Добавили Разн.)
+    # Заголовки
     header = ["Obyekt", "Mahsulot", "Birl.", "Reja", "Fakt", "Farq", "Narxi", "Summa"]
     if is_admin:
         header += ["Xarid", "Foyda"]
@@ -116,7 +134,7 @@ def create_shift_pdf(shift, is_admin=False):
             Paragraph(d.product.unit, cell_style),
             Paragraph(str(d.weight_plan), cell_style),
             Paragraph(str(d.weight_fact), cell_style),
-            Paragraph(f"{diff:+.2f}", cell_style),  # Формат +0.50 или -0.20
+            Paragraph(f"{diff:+.2f}", cell_style),
             Paragraph(f"{d.p_sadik_fact:,.0f}", cell_style),
             Paragraph(f"{d.total_price_sadik:,.0f}", cell_style)
         ]
@@ -127,7 +145,7 @@ def create_shift_pdf(shift, is_admin=False):
             ]
         table_data.append(row)
 
-    # Ширина колонок (оптимизируем под A4)
+    # Ширина колонок
     if not is_admin:
         col_widths = [115, 100, 30, 45, 45, 45, 60, 70]
     else:
@@ -145,19 +163,33 @@ def create_shift_pdf(shift, is_admin=False):
     elements.append(t)
     elements.append(Spacer(1, 15))
 
-    # Итоги
+    # --- ИТОГИ С УЧЕТОМ НОВЫХ РАСХОДОВ ---
     total_rev = sum(d.total_price_sadik for d in shift.deliveries)
     fuel = shift.fuel_expense or 0
+    other_exp = shift.other_expenses or 0
+    other_comment = shift.other_expenses_comment or ""
+
+    total_expenses = fuel + other_exp
+
+    # Формируем текст итогов
     res_text = f"TUSHUM: <b>{total_rev:,.0f}</b> | BENZIN: <b>{fuel:,.0f}</b>"
+
+    # Добавляем прочие расходы, если они есть
+    if other_exp > 0:
+        comment_str = f" ({other_comment})" if other_comment else ""
+        res_text += f" | BOSHQA: <b>{other_exp:,.0f}</b>{comment_str}"
 
     if is_admin:
         total_cost = sum(d.total_cost_zakup for d in shift.deliveries)
-        # ПРИБЫЛЬ -> FOYDA
-        res_text += f" | FOYDA: <b>{total_rev - total_cost - fuel:,.0f} so'm</b>"
+        # Чистая прибыль (Выручка - Закуп - Все расходы)
+        final_profit = total_rev - total_cost - total_expenses
+        res_text += f"<br/>📈 <b>SOF FOYDA: {final_profit:,.0f} so'm</b>"
     else:
-        # ИТОГО -> JAMI
-        res_text += f" | JAMI: <b>{total_rev - fuel:,.0f} so'm</b>"
+        # Остаток в кассу (Выручка - Все расходы)
+        final_total = total_rev - total_expenses
+        res_text += f"<br/>💵 <b>JAMI: {final_total:,.0f} so'm</b>"
 
-    elements.append(Paragraph(res_text, ParagraphStyle('S', fontName=FONT_NAME, fontSize=9)))
+    elements.append(Paragraph(res_text, ParagraphStyle('S', fontName=FONT_NAME, fontSize=9, leading=12)))
+
     doc.build(elements)
     return file_path

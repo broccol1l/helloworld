@@ -13,6 +13,8 @@ class DeliveryState(StatesGroup):
     weight_plan = State()       # Ввод плана (кг или шт)
     weight_fact = State()       # Ввод факта (кг или шт)
     waiting_fuel = State()  # Новый стейт для бензина
+    waiting_other_amount = State()  # Ввод суммы доп. расходов # НА СЕРВАК
+    waiting_other_comment = State()  # Ввод комментария (обед, ремонт и т.д.) # НА СЕРВАК
 
 
 # --- ТОВАРЫ: ДОБАВЛЕНИЕ ---
@@ -32,6 +34,9 @@ class AdminEdit(StatesGroup):
     waiting_p_zakup_edit = State()
     waiting_name_edit = State()
     waiting_shift_fuel = State()
+
+    waiting_shift_other_exp = State()  # Ожидание суммы # НА СЕРВАК
+    waiting_shift_other_comment = State()  # Ожидание комментария # НА СЕРВАК
 
 # --- САДИКИ ---
 class KGState(StatesGroup):

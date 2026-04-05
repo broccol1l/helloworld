@@ -84,10 +84,15 @@ async def add_delivery(session: AsyncSession, shift_id: int, product_id: int,
 
 from datetime import datetime
 
-async def close_shift(session: AsyncSession, shift_id: int, fuel_amount: float):
+async def close_shift(session: AsyncSession, shift_id: int, fuel_amount: float, other_amount: float = 0.0,
+                      other_comment: str = ""):
     shift = await session.get(Shift, shift_id)
     if shift:
         shift.fuel_expense = fuel_amount
+        # Добавляем новые расходы в базу
+        shift.other_expenses = other_amount
+        shift.other_expenses_comment = other_comment
+
         shift.is_closed = True
         shift.closed_at = datetime.now()
         await session.commit()
@@ -216,17 +221,18 @@ async def get_shift_full_details(session: AsyncSession, shift_id: int):
 # АНАЛИТИКА
 # 1. Исправленный Дашборд
 async def get_dashboard_stats(session: AsyncSession, start_date: datetime, end_date: datetime):
-    # Теперь мы связываем смены с отгрузками и берем бензин ТОЛЬКО из непустых смен
+    # Теперь мы связываем смены с отгрузками и берем расходы ТОЛЬКО из непустых смен
     query = select(
         Shift.id,
         Shift.fuel_expense,
+        Shift.other_expenses, # <--- ДОБАВИЛИ КОЛОНКУ СЮДА
         func.sum(Delivery.weight_fact * Delivery.p_sadik_fact).label("revenue"),
         func.sum(Delivery.weight_fact * Delivery.p_zakup_fact).label("cost")
     ).join(Delivery, Delivery.shift_id == Shift.id).where(
         Shift.opened_at >= start_date,
         Shift.opened_at <= end_date,
         Shift.is_closed == True
-    ).group_by(Shift.id, Shift.fuel_expense)
+    ).group_by(Shift.id, Shift.fuel_expense, Shift.other_expenses) # <--- ДОБАВИЛИ В GROUP_BY
 
     result = await session.execute(query)
     rows = result.all()
@@ -234,19 +240,23 @@ async def get_dashboard_stats(session: AsyncSession, start_date: datetime, end_d
     total_revenue = 0.0
     total_cost = 0.0
     total_fuel = 0.0
+    total_other = 0.0 # <--- ПЕРЕМЕННАЯ ДЛЯ ДРУГИХ РАСХОДОВ
 
-    # Складываем всё вместе (бензин теперь считается 1 раз для каждой реальной смены)
+    # Складываем всё вместе
     for row in rows:
         total_revenue += row.revenue or 0.0
         total_cost += row.cost or 0.0
         total_fuel += row.fuel_expense or 0.0
+        total_other += row.other_expenses or 0.0 # <--- ПЛЮСУЕМ ПРОЧИЕ РАСХОДЫ
 
-    net_profit = total_revenue - total_cost - total_fuel
+    # Вычитаем из прибыли И бензин, И другие расходы
+    net_profit = total_revenue - total_cost - total_fuel - total_other
 
     return {
         "revenue": total_revenue,
         "cost": total_cost,
         "fuel": total_fuel,
+        "other_exp": total_other, # <--- ОТДАЕМ ЭТО ДЛЯ ТЕКСТА
         "profit": net_profit
     }
 
@@ -313,13 +323,16 @@ async def get_all_deliveries_for_export(session: AsyncSession, start_date: datet
         Delivery.p_sadik_fact.label("Цена_Садик"),
         Delivery.p_zakup_fact.label("Цена_Закуп"),
         Shift.fuel_expense.label("Бензин_Смены"),
+        # --- НОВЫЕ ПОЛЯ ДЛЯ ЭКСПОРТА ---
+        Shift.other_expenses.label("Другие_Расходы"),
+        Shift.other_expenses_comment.label("Комментарий_Расходов"),
+        # ------------------------------
         (Delivery.weight_fact * Delivery.p_sadik_fact).label("Выручка"),
         (Delivery.weight_fact * Delivery.p_zakup_fact).label("Закуп_сумма")
     ).join(Delivery.shift).join(Delivery.product).join(Delivery.kindergarten).join(Shift.driver).where(
         Shift.is_closed == True
     )
 
-    # Если передали даты - фильтруем
     if start_date and end_date:
         query = query.where(Shift.opened_at >= start_date, Shift.opened_at <= end_date)
 
@@ -338,7 +351,12 @@ async def get_deliveries_by_period(session: AsyncSession, start_date: datetime, 
         Product.unit.label("unit"),
         Delivery.weight_fact.label("weight"),
         Delivery.p_sadik_fact.label("price"),
-        (Delivery.weight_fact * Delivery.p_sadik_fact).label("total")
+        (Delivery.weight_fact * Delivery.p_sadik_fact).label("total"),
+        # --- ДОБАВИЛИ РАСХОДЫ ДЛЯ ОТЧЕТОВ ---
+        Shift.fuel_expense.label("fuel"),
+        Shift.other_expenses.label("other_exp"),
+        Shift.other_expenses_comment.label("other_comment")
+        # ------------------------------------
     ).join(Delivery.shift).join(Delivery.product).join(Delivery.kindergarten).join(Shift.driver).where(
         Shift.opened_at >= start_date,
         Shift.opened_at <= end_date,

@@ -432,8 +432,9 @@ def get_admin_edit_loop_kb(shift_id: int):
     builder.row(InlineKeyboardButton(text="🏫 Yangi bog'cha qo'shish", callback_data=f"adm_add_kg_start:{shift_id}"))
     builder.row(InlineKeyboardButton(text="🔍 Ko'rish / Bog'chalarni o'chirish", callback_data=f"adm_manage_shift:{shift_id}"))
     builder.row(InlineKeyboardButton(text="🗓 Smena sanasini o'zgartirish", callback_data=f"adm_change_date:{shift_id}"))
-    # НОВАЯ КНОПКА:
     builder.row(InlineKeyboardButton(text="⛽ Benzinni o'zgartirish", callback_data=f"adm_change_fuel:{shift_id}"))
+    # НОВАЯ КНОПКА:
+    builder.row(InlineKeyboardButton(text="🛠 Boshqa xarajatni o'zgartirish", callback_data=f"adm_change_other:{shift_id}"))
     builder.row(InlineKeyboardButton(text="🏁 Tuzatishlarni yakunlash", callback_data=f"adm_finish_edit:{shift_id}"))
     builder.adjust(1)
     return builder.as_markup()

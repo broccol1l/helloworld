@@ -244,12 +244,11 @@ async def close_shift_button_handler(message: types.Message, state: FSMContext, 
 
 
 # 1. Начало закрытия смены (обработка и кнопки, и инлайна)
-@router.message(F.text == "🏁 Smenani yopish")
+@router.message(F.text == "🏁 Smenani yopish") # НА СЕРВАК
 async def close_shift_start(message: types.Message, state: FSMContext, session: AsyncSession,
                             manual_user_id: int = None):
     # Если manual_user_id передан (из инлайна), берем его. Иначе из сообщения.
     tg_id = manual_user_id if manual_user_id else message.from_user.id
-
     user = await requests.get_user(session, tg_id)
     # Ищем активную смену
     shift = await requests.get_active_shift(session, user.id)
@@ -261,82 +260,128 @@ async def close_shift_start(message: types.Message, state: FSMContext, session: 
     await state.update_data(shift_id=shift.id)
     await state.set_state(DeliveryState.waiting_fuel)
 
-    # Создаем временную кнопку для быстрого ввода 0
     kb = types.ReplyKeyboardMarkup(
         keyboard=[[types.KeyboardButton(text="0 (yoqilg'i quyilmadi)")]], # До: 0 (не заправлялся)
         resize_keyboard=True
     )
-
     await message.answer(
         "Bugungi benzin xarajatini kiriting (so'mda).\n"
         "Agar xarajat bo'lmagan bo'lsa, 0 kiriting yoki pastdagi tugmani bosing:",
         reply_markup=kb
     )
-    # "Введите сумму расхода на бензин за сегодня (сум).\n"
-    #  "Если расходов не было, введите 0 или нажмите кнопку ниже:"
 
-
-@router.message(DeliveryState.waiting_fuel)
-async def close_shift_done(message: types.Message, state: FSMContext, session: AsyncSession):
-    fuel_text = message.text.split(' ')[0]
-
+# 2. Обработка бензина и вопрос про другие расходы
+@router.message(DeliveryState.waiting_fuel) # НА СЕРВАК
+async def process_fuel(message: types.Message, state: FSMContext):
     try:
-        # fuel_amount = float(fuel_text.replace(',', '.')) LAST SAVE
+        fuel_text = message.text.split(' ')[0]
         clean_fuel = fuel_text.replace('.', '').replace(',', '')
         fuel_amount = float(clean_fuel)
 
-        data = await state.get_data()
-        shift_id = data.get('shift_id')
+        # Сохраняем бензин в память
+        await state.update_data(fuel_amount=fuel_amount)
 
-        deliveries = await requests.get_shift_deliveries(session, shift_id)
-        user = await requests.get_user(session, message.from_user.id)
+        # Переходим к доп. расходам
+        await state.set_state(DeliveryState.waiting_other_amount)
 
-        if not deliveries:
-            await requests.close_shift(session, shift_id, fuel_amount)
-            await state.clear()
-            await message.answer("🏁 Smena yopildi. Bugun yetkazib berishlar bo'lmadi.", reply_markup=main_menu_kb(user.is_admin))
-            # 🏁 Смена закрыта. Отгрузок сегодня не было.
-            return
-
-        report = "📝 <b>ISH KUNINGIZ YAKUNI:</b>\n\n" # 📝 ИТОГ ВАШЕЙ СМЕНЫ:
-        kg_data = {}
-        total_shift_sum = 0
-
-        for d in deliveries:
-            kg_name = d.kindergarten.name
-            if kg_name not in kg_data:
-                kg_data[kg_name] = {"items": [], "total": 0}
-
-            price = d.total_price_sadik
-            kg_data[kg_name]["items"].append(
-                f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} — <b>{price:,} сум</b>")
-            kg_data[kg_name]["total"] += price
-            total_shift_sum += price
-
-        for name, info in kg_data.items():
-            report += f"🏫 <b>{name}</b>\n"
-            report += "\n".join(info["items"]) + "\n"
-            report += f"   🏷 Итого: <b>{info['total']:,} сум</b>\n\n"
-
-        # --- ВОТ ТУТ МЕНЯЕМ ВЫВОД ---
-        # Считаем чистую сумму прямо здесь для текста
-        final_net_amount = total_shift_sum - fuel_amount
-
-        report += f"💰 Umumiy tushum: {total_shift_sum:,} so'm\n" # 💰 Общая выручка: {total_shift_sum:,} сум
-        report += f"⛽ Benzin: -{int(fuel_amount):,} so'm\n" # Бензин # -{fuel_amount:,} LAST SAVE
-        report += "───────────────────\n" #ИТОГО К ВЫДАЧЕ:
-        report += f"💵 <b>TOPSHIRILADIGAN JAMI SUMMA: {final_net_amount:,} so'm</b>\n\n"  #Теперь водитель видит разницу
-        report += "🏁 Smena yopildi. Maroqli hordiq chiqaring!" # "🏁 Смена закрыта. Хорошего отдыха!"
-        # ----------------------------
-
-        await requests.close_shift(session, shift_id, fuel_amount)
-        await state.clear()
-
-        await message.answer(report, reply_markup=main_menu_kb(user.is_admin), parse_mode="HTML")
-
+        kb = types.ReplyKeyboardMarkup(
+            keyboard=[[types.KeyboardButton(text="0 (boshqa xarajat yo'q)")]],
+            resize_keyboard=True
+        )
+        await message.answer(
+            "Boshqa xarajatlar bormi? (remont, obed, jarima va h.k.)\n"
+            "Agar bo'lsa summasini yozing, bo'lmasa 0 kiriting:",
+            reply_markup=kb
+        )
     except ValueError:
-        # Ошибка! Введите сумму расхода цифрами (например: 50000) или 0.
-        await message.answer("Xato! Xarajat summasini raqamlar bilan kiriting (masalan: 50000) yoki 0")
+        await message.answer("Xato! Faqat raqam kiriting (masalan: 50000).")
+
+
+# 3. Обработка доп. расходов
+@router.message(DeliveryState.waiting_other_amount) # НА СЕРВАК
+async def process_other_amount(message: types.Message, state: FSMContext, session: AsyncSession): # НА СЕРВАк
+    try:
+        exp_text = message.text.split(' ')[0]
+        clean_exp = exp_text.replace('.', '').replace(',', '')
+        other_amount = float(clean_exp)
+
+        await state.update_data(other_amount=other_amount)
+
+        if other_amount > 0:
+            # Если есть расход, спрашиваем на что
+            await state.set_state(DeliveryState.waiting_other_comment)
+            await message.answer("Bu xarajat nima uchun qilindi? (qisqa yozing):",
+                                 reply_markup=types.ReplyKeyboardRemove())
+        else:
+            # Если расхода нет, сразу закрываем смену (передаем message искусственно)
+            await state.update_data(other_comment="")
+            await close_shift_final(message, state, session)
+    except ValueError:
+        await message.answer("Xato! Faqat raqam kiriting.")
+
+# 4. Обработка комментария
+@router.message(DeliveryState.waiting_other_comment)
+async def process_other_comment(message: types.Message, state: FSMContext, session: AsyncSession): # НА СЕРВАК
+    await state.update_data(other_comment=message.text)
+    await close_shift_final(message, state, session)
+
+# Вспомогательная функция финала
+async def close_shift_final(message: types.Message, state: FSMContext, session: AsyncSession): # НА СЕРВАК
+    data = await state.get_data()
+    shift_id = data.get('shift_id')
+    fuel_amount = data.get('fuel_amount', 0.0)
+    other_amount = data.get('other_amount', 0.0)
+    other_comment = data.get('other_comment', '')
+
+    deliveries = await requests.get_shift_deliveries(session, shift_id)
+    user = await requests.get_user(session, message.from_user.id)
+
+    if not deliveries:
+        # ПЕРЕДАЕМ РАЗДЕЛЬНО: бензин, доп. расходы и комментарий
+        await requests.close_shift(session, shift_id, fuel_amount, other_amount, other_comment)
+        await state.clear()
+        await message.answer("🏁 Smena yopildi. Bugun yetkazib berishlar bo'lmadi.",
+                             reply_markup=main_menu_kb(user.is_admin))
+        return
+
+    report = "📝 <b>ISH KUNINGIZ YAKUNI:</b>\n\n"
+    kg_data = {}
+    total_shift_sum = 0
+
+    for d in deliveries:
+        kg_name = d.kindergarten.name
+        if kg_name not in kg_data:
+            kg_data[kg_name] = {"items": [], "total": 0}
+        price = d.total_price_sadik
+        # Сразу обернул price в int(), чтобы не было .0
+        kg_data[kg_name]["items"].append(
+            f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} — <b>{int(price):,} so'm</b>")
+        kg_data[kg_name]["total"] += price
+        total_shift_sum += price
+
+    for name, info in kg_data.items():
+        report += f"🏫 <b>{name}</b>\n"
+        report += "\n".join(info["items"]) + "\n"
+        report += f"   🏷 Jami: <b>{int(info['total']):,} so'm</b>\n\n"
+
+    # Считаем чистую сумму
+    total_expenses = fuel_amount + other_amount
+    final_net_amount = total_shift_sum - total_expenses
+
+    # Убрал везде лишние .0 через int()
+    report += f"💰 Umumiy tushum: {int(total_shift_sum):,} so'm\n"
+    report += f"⛽ Benzin: -{int(fuel_amount):,} so'm\n"
+    if other_amount > 0:
+        report += f"🛠 Boshqa xarajatlar: -{int(other_amount):,} so'm ({other_comment})\n"
+    report += "───────────────────\n"
+    report += f"💵 <b>TOPSHIRILADIGAN JAMI SUMMA: {int(final_net_amount):,} so'm</b>\n\n"
+    report += "🏁 Smena yopildi. Maroqli hordiq chiqaring!"
+
+    # ПЕРЕДАЕМ РАЗДЕЛЬНО: бензин, доп. расходы и комментарий
+    await requests.close_shift(session, shift_id, fuel_amount, other_amount, other_comment)
+    await state.clear()
+    await message.answer(report, reply_markup=main_menu_kb(user.is_admin), parse_mode="HTML")
+
 # Показываем садики, которые уже ввел водитель в этой смене
 @router.callback_query(F.data == "manage_current_shift")
 async def manage_current(callback: types.CallbackQuery, session: AsyncSession):

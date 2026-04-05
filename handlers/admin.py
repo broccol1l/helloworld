@@ -757,36 +757,45 @@ async def admin_view_single_report(callback: types.CallbackQuery, session: Async
     deliveries = result_deliveries.scalars().all()
 
     if not shift:
-        await callback.answer("⚠️ Smena topilmadi.", show_alert=True) # "⚠️ Смена не найдена."
+        await callback.answer("⚠️ Smena topilmadi.", show_alert=True)  # "⚠️ Смена не найдена."
         return
 
     report_text = f"📋 **{shift.opened_at.strftime('%d.%m.%Y')} sana uchun batafsil hisobot**\n"
     report_text += f"👤 Haydovchi: {shift.driver.full_name if shift.driver else 'O\'chirilgan'}\n"
     report_text += "───────────────────\n"
-    # f"📋 **Детальный отчет за {shift.opened_at.strftime('%d.%m.%Y')}**\n"
-    # f"👤 Водитель: {shift.driver.full_name if shift.driver else 'Удален'}\n"
 
     total_sum = 0
-    total_cost = 0 # Считаем себестоимость (закуп)
+    total_cost = 0  # Считаем себестоимость (закуп)
 
     if not deliveries:
-        report_text += "_Yetkazib berishlar qayd etilmadi_\n" # "_Отгрузок не зафиксировано_\n"
+        report_text += "_Yetkazib berishlar qayd etilmadi_\n"  # "_Отгрузок не зафиксировано_\n"
     else:
         for d in deliveries:
             report_text += f"🏫 {d.kindergarten.name}\n"
-            report_text += f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} = {d.total_price_sadik:,} сум\n"
+            report_text += f"  ◦ {d.product.name}: {d.weight_fact} {d.product.unit} = {int(d.total_price_sadik):,} so'm\n"
             total_sum += d.total_price_sadik
             total_cost += d.total_cost_zakup
 
+    # --- ВОТ ТУТ НОВЫЕ РАСХОДЫ ---
     fuel = shift.fuel_expense or 0
-    final_amount = total_sum - fuel # Сколько водитель должен сдать налички
-    net_profit = total_sum - total_cost - fuel # Твоя чистая прибыль
+    other_exp = shift.other_expenses or 0
+    other_comment = shift.other_expenses_comment or ""
+
+    total_expenses = fuel + other_exp
+    final_amount = total_sum - total_expenses  # Сколько водитель должен сдать налички
+    net_profit = total_sum - total_cost - total_expenses  # Твоя чистая прибыль
 
     report_text += "───────────────────\n"
-    report_text += f"⛽ Benzin: **{fuel:,} so'm**\n" # f"⛽ Бензин: **{fuel:,} сум**\n"
-    report_text += f"💰 UMUMIY TUSHUM: **{total_sum:,} so'm**\n" # f"💰 ОБЩАЯ ВЫРУЧКА: **{total_sum:,} сум**\n"
-    report_text += f"💵 **KASSA (HAYDOVCHI TOPSHIRADI): {final_amount:,} so'm**\n" # f"💵 **КАССА (СДАЕТ ВОДИТЕЛЬ): {final_amount:,} сум**\n"
-    report_text += f"📈 **SOF FOYDA: {net_profit:,} so'm**" # f"📈 **ЧИСТАЯ ПРИБЫЛЬ: {net_profit:,} сум**"
+    report_text += f"💰 UMUMIY TUSHUM: **{int(total_sum):,} so'm**\n"
+    report_text += f"⛽ Benzin: **-{int(fuel):,} so'm**\n"
+
+    if other_exp > 0:
+        comment_str = f" ({other_comment})" if other_comment else ""
+        report_text += f"🛠 Boshqa xarajatlar: **-{int(other_exp):,} so'm**{comment_str}\n"
+
+    report_text += "───────────────────\n"
+    report_text += f"💵 **KASSA (HAYDOVCHI TOPSHIRADI): {int(final_amount):,} so'm**\n"
+    report_text += f"📈 **SOF FOYDA: {int(net_profit):,} so'm**"
 
     from keyboards.inline import get_admin_report_tools_kb
     await callback.message.edit_text(
@@ -1071,6 +1080,92 @@ async def admin_change_fuel_process(message: types.Message, state: FSMContext, s
     # LAST SAVE {new_fuel:,}
     # ✅ Расход на бензин обновлен на... Что делаем дальше?
 
+# --- РЕДАКТИРОВАНИЕ ПРОЧИХ РАСХОДОВ ---
+
+# 1. Начало процесса (запрос суммы)
+@router.callback_query(F.data.startswith("adm_change_other:"))
+async def admin_change_other_start(callback: types.CallbackQuery, state: FSMContext):
+    shift_id = int(callback.data.split(":")[1])
+
+    await state.update_data(shift_id=shift_id)
+    await state.set_state(AdminEdit.waiting_shift_other_exp)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Bekor qilish", callback_data=f"adm_edit_rep:{shift_id}")
+
+    await callback.message.edit_text(
+        "🛠 **Boshqa xarajatlarni o'zgartirish**\n\nYangi summani raqamlarda kiriting.\nAgar xarajatni o'chirmoqchi bo'lsangiz, `0` yozing:",
+        reply_markup=builder.as_markup(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+# 2. Обработка введенной суммы
+@router.message(AdminEdit.waiting_shift_other_exp)
+async def admin_change_other_amount(message: types.Message, state: FSMContext, session: AsyncSession):
+    try:
+        clean_text = message.text.replace('.', '').replace(',', '').replace(' ', '')
+        amount = float(clean_text)
+    except ValueError:
+        await message.answer("⚠️ Xato! Summani faqat raqamlarda kiriting.")
+        return
+
+    data = await state.get_data()
+    shift_id = data.get("shift_id")
+    from keyboards.inline import get_admin_edit_loop_kb
+
+    # Если ввели 0 — обнуляем и сумму, и комментарий сразу
+    if amount == 0:
+        await session.execute(
+            update(Shift).where(Shift.id == shift_id).values(
+                other_expenses=0.0,
+                other_expenses_comment=""
+            )
+        )
+        await session.commit()
+        await state.set_state(None)
+
+        await message.answer(
+            "✅ Boshqa xarajatlar o'chirildi (0 so'm).\n\nKeyingi qadam nima?",
+            reply_markup=get_admin_edit_loop_kb(shift_id),
+            parse_mode="Markdown"
+        )
+        return
+
+    # Если сумма > 0, сохраняем её и ждем комментарий
+    await state.update_data(new_other_amount=amount)
+    await state.set_state(AdminEdit.waiting_shift_other_comment)
+
+    await message.answer("📝 Ushbu xarajat nima uchun qilinganini yozing (masalan: obed, remont, jarima):")
+
+
+# 3. Обработка комментария и финальное сохранение
+@router.message(AdminEdit.waiting_shift_other_comment)
+async def admin_change_other_comment(message: types.Message, state: FSMContext, session: AsyncSession):
+    comment = message.text
+    data = await state.get_data()
+    shift_id = data.get("shift_id")
+    amount = data.get("new_other_amount")
+
+    # Обновляем в базе оба поля
+    await session.execute(
+        update(Shift).where(Shift.id == shift_id).values(
+            other_expenses=amount,
+            other_expenses_comment=comment
+        )
+    )
+    await session.commit()
+
+    # Сбрасываем состояние
+    await state.set_state(None)
+
+    from keyboards.inline import get_admin_edit_loop_kb
+    await message.answer(
+        f"✅ Boshqa xarajatlar yangilandi: **{int(amount):,} so'm** ({comment})\n\nKeyingi qadam nima?",
+        reply_markup=get_admin_edit_loop_kb(shift_id),
+        parse_mode="Markdown"
+    )
 
 # АНАЛИТИКА
 @router.callback_query(F.data == "admin_stats")
@@ -1079,7 +1174,9 @@ async def admin_stats_main(callback: types.CallbackQuery, session: AsyncSession)
 
     # 1. Считаем количество записей в базе (твой старый код)
     users_count = await session.scalar(select(func.count(User.id)))
-    products_count = await session.scalar(select(func.count(Product.id)))
+    products_count = await session.scalar(
+        select(func.count(Product.id)).where(Product.is_active == True)  # НА СЕРВАК
+    )
     # kg_count = await session.scalar(select(func.count(Kindergarten.id))) # LAST SAVE
     kg_count = await session.scalar(
         select(func.count(Kindergarten.id)).where(Kindergarten.is_active == True)
@@ -1132,9 +1229,6 @@ async def admin_stats_dashboard(callback: types.CallbackQuery, state: FSMContext
             reply_markup=builder.as_markup(),
             parse_mode="Markdown"
         )
-        # "🗓 **Анализ за произвольный период**\n\n"
-        #             "Введите две даты через дефис в формате `ДД.ММ.ГГГГ - ДД.ММ.ГГГГ`.\n\n"
-        #             "Пример: `01.04.2026 - 15.04.2026`",
         return
 
     now = datetime.now()
@@ -1168,24 +1262,22 @@ async def admin_stats_dashboard(callback: types.CallbackQuery, state: FSMContext
     stats = await get_dashboard_stats(session, start_date, end_date)
     profitability = (stats["profit"] / stats["revenue"] * 100) if stats["revenue"] > 0 else 0
 
+    # --- ВОТ ТУТ НОВЫЕ РАСХОДЫ ---
     text = (
         f"📊 **{period_name} UCHUN NATIJALAR**:\n\n"
         f"💰 Aylanma (Tushum): **{int(stats['revenue']):,} so'm**\n"
         f"📉 Mahsulot xarajatlari: **{int(stats['cost']):,} so'm**\n"
         f"⛽️ Benzin xarajatlari: **{int(stats['fuel']):,} so'm**\n"
+    )
+
+    if stats.get('other_exp', 0) > 0:
+        text += f"🛠 Boshqa xarajatlar: **{int(stats['other_exp']):,} so'm**\n"
+
+    text += (
         f"───────────────────\n"
         f"🏆 **SOF FOYDA: {int(stats['profit']):,} so'm**\n\n"
         f"📈 Biznes rentabelligi: **{profitability:.1f}%**"
     )
-    # text = (
-    #         f"📊 **ИТОГИ ЗА {period_name}**:\n\n"
-    #         f"💰 Оборот (Выручка): **{int(stats['revenue']):,} сум**\n"
-    #         f"📉 Затраты на товар: **{int(stats['cost']):,} сум**\n"
-    #         f"⛽️ Затраты на бензин: **{int(stats['fuel']):,} сум**\n"
-    #         f"───────────────────\n"
-    #         f"🏆 **ЧИСТАЯ ПРИБЫЛЬ: {int(stats['profit']):,} сум**\n\n"
-    #         f"📈 Рентабельность бизнеса: **{profitability:.1f}%**"
-    #     )
 
     from keyboards.inline import get_dashboard_kb
     await callback.message.edit_text(text, reply_markup=get_dashboard_kb(period), parse_mode="Markdown")
@@ -1208,7 +1300,6 @@ async def admin_stats_drivers_list(callback: types.CallbackQuery, session: Async
     elif period == "month":
         start_date = now.replace(day=1, hour=0, minute=0, second=0)
         end_date = now.replace(hour=23, minute=59, second=59)
-    # --- ДОБАВЬ ВОТ ЭТО ---
     elif "-" in period:
         start_str, end_str = period.split("-")
         start_date = datetime.strptime(start_str, "%Y%m%d").replace(hour=0, minute=0, second=0)
@@ -1219,13 +1310,13 @@ async def admin_stats_drivers_list(callback: types.CallbackQuery, session: Async
 
     if not drivers_data:
         await callback.answer("Ushbu davr uchun haydovchilar bo'yicha ma'lumot topilmadi.", show_alert=True)
-        # "За этот период данных по водителям нет."
         return
 
+    # --- ИЗМЕНИЛ ТОЛЬКО ТЕКСТ ПОЯСНЕНИЯ ---
     await callback.message.edit_text(
         f"👥 **Haydovchilar samaradorligi**\n"
         f"Davr: {period.upper()}\n"
-        f"(Xarid va benzin xarajatlari chegirilgandagi sof foyda)",
+        f"(Xarid, benzin va boshqa xarajatlar chegirilgandagi sof foyda)", # Добавлено "va boshqa xarajatlar"
         reply_markup=get_drivers_stats_kb(drivers_data, period, page),
         parse_mode="Markdown"
     )
@@ -1351,7 +1442,7 @@ async def admin_stats_drivers_list(callback: types.CallbackQuery, session: Async
 #     )
 
 
-@router.message(AdminStatsState.waiting_custom_period, F.text)
+@router.message(AdminStatsState.waiting_custom_period, F.text) # НА СЕРВАК
 async def admin_process_custom_dates(message: types.Message, state: FSMContext, session: AsyncSession):
     text = message.text.strip()
 
@@ -1359,53 +1450,49 @@ async def admin_process_custom_dates(message: types.Message, state: FSMContext, 
         # Пытаемся разбить текст на две даты
         start_str, end_str = text.split("-")
 
-        # Проверяем правильность формата и сразу ставим правильное время (00:00 и 23:59)
+        # Проверяем правильность формата и сразу ставим правильное время
         start_date = datetime.strptime(start_str.strip(), "%d.%m.%Y").replace(hour=0, minute=0, second=0)
         end_date = datetime.strptime(end_str.strip(), "%d.%m.%Y").replace(hour=23, minute=59, second=59)
 
-        # Защита: дата начала не может быть позже даты конца
         if start_date > end_date:
             raise ValueError("Boshlanish sanasi tugash sanasidan katta")
-            # "Дата начала больше даты конца"
 
     except ValueError:
         await message.answer(
             "❌ **Format xatosi!**\nIltimos, sanalarni худди намунадагидек киритинг:\n`01.04.2026 - 15.04.2026`",
             parse_mode="Markdown")
-        # "❌ **Ошибка формата!**\nПожалуйста, введите даты строго как в примере:\n`01.04.2026 - 15.04.2026`",
         return
 
     # Выходим из состояния
     await state.clear()
 
-    # Формируем компактную строку для callback_data (чтобы влезло в кнопку Telegram)
+    # Формируем компактную строку для callback_data
     period_code = f"{start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')}"
     period_name = f"{start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}"
 
-    # --- СЧИТАЕМ СТАТИСТИКУ ПРЯМО ЗДЕСЬ ---
+    # СЧИТАЕМ СТАТИСТИКУ
     stats = await get_dashboard_stats(session, start_date, end_date)
     profitability = (stats["profit"] / stats["revenue"] * 100) if stats["revenue"] > 0 else 0
 
+    # --- ОБНОВЛЕННЫЙ ТЕКСТ (С ДОПОЛНИТЕЛЬНЫМИ РАСХОДАМИ) ---
     report_text = (
         f"📊 **{period_name} UCHUN NATIJALAR**:\n\n"
         f"💰 Aylanma (Tushum): **{int(stats['revenue']):,} so'm**\n"
         f"📉 Mahsulot xarajatlari: **{int(stats['cost']):,} so'm**\n"
         f"⛽️ Benzin xarajatlari: **{int(stats['fuel']):,} so'm**\n"
+    )
+
+    # Показываем "Boshqa xarajatlar" только если они были за этот период
+    if stats.get('other_exp', 0) > 0:
+        report_text += f"🛠 Boshqa xarajatlar: **{int(stats['other_exp']):,} so'm**\n"
+
+    report_text += (
         f"───────────────────\n"
         f"🏆 **SOF FOYDA: {int(stats['profit']):,} so'm**\n\n"
         f"📈 Biznes rentabelligi: **{profitability:.1f}%**"
     )
-    # report_text = (
-    #         f"📊 **ИТОГИ ЗА {period_name}**:\n\n"
-    #         f"💰 Оборот (Выручка): **{int(stats['revenue']):,} сум**\n"
-    #         f"📉 Затраты на товар: **{int(stats['cost']):,} сум**\n"
-    #         f"⛽️ Затраты на бензин: **{int(stats['fuel']):,} сум**\n"
-    #         f"───────────────────\n"
-    #         f"🏆 **ЧИСТАЯ ПРИБЫЛЬ: {int(stats['profit']):,} сум**\n\n"
-    #         f"📈 Рентабельность бизнеса: **{profitability:.1f}%**"
-    #     )
+    # -----------------------------------------------------
 
-    # Отправляем сообщение как обычный ответ на текст (через message.answer)
     from keyboards.inline import get_dashboard_kb
     await message.answer(report_text, reply_markup=get_dashboard_kb(period_code), parse_mode="Markdown")
 
@@ -1455,34 +1542,28 @@ def parse_dates_from_period(period: str):
 #     pass
 
 # --- 2. ГЕНЕРАТОР EXCEL ---
-@router.callback_query(F.data.startswith("adm_stats_dl_xlsx:"))
+@router.callback_query(F.data.startswith("adm_stats_dl_xlsx:")) # НА СЕРВАК
 @router.callback_query(F.data == "adm_stats_export_all:xlsx")
 async def admin_export_universal_excel(callback: types.CallbackQuery, session: AsyncSession):
-    await callback.answer("⏳ Batafsil hisobot tayyorlanyapti... Bir necha soniya vaqt oladi.", show_alert=False)
-    # "⏳ Формирую детальный отчет... Это займет пару секунд."
+    await callback.answer("⏳ Batafsil hisobot tayyorlanyapti...", show_alert=False)
 
     if "dl_xlsx" in callback.data:
         period = callback.data.split(":")[1]
         start_date, end_date = parse_dates_from_period(period)
-        if start_date.date() == end_date.date():
-            filename_prefix = f"Hisobot_{start_date.strftime('%d%m')}"
-            # Report_
-        else:
-            filename_prefix = f"Hisobot_{start_date.strftime('%d%m')}-{end_date.strftime('%d%m')}"
-            # Report_
+        filename_prefix = f"Hisobot_{start_date.strftime('%d%m')}" if start_date.date() == end_date.date() else f"Hisobot_{start_date.strftime('%d%m')}-{end_date.strftime('%d%m')}"
     else:
         start_date, end_date = None, None
-        filename_prefix = "Global_Hisobot" # _Report
+        filename_prefix = "Global_Hisobot"
 
     raw_data = await get_all_deliveries_for_export(session, start_date, end_date)
 
     if not raw_data:
         await callback.answer("❌ Ushbu davr uchun birorta ham yetkazib berish topilmadi.", show_alert=True)
-        # "❌ За этот период нет ни одной отгрузки."
         return
 
     df = pd.DataFrame(raw_data)
 
+    # Обновленный маппинг с учетом новых колонок
     mapping = {
         'Дата': 'Sana',
         'Водитель': 'Haydovchi',
@@ -1493,67 +1574,82 @@ async def admin_export_universal_excel(callback: types.CallbackQuery, session: A
         'Факт': 'Fakt',
         'Цена_Садик': 'Bog\'cha_narxi',
         'Цена_Закуп': 'Xarid_narxi',
-        'Бензин_Смены': 'Smena_benzini',
         'Выручка': 'Tushum',
-        'Закуп_сумма': 'Xarid_summasi'
+        'Закуп_сумма': 'Xarid_summasi',
+        'Бензин_Смены': 'Smena_benzini',
+        'Другие_Расходы': 'Boshqa_xarajatlar',  # НОВОЕ
+        'Комментарий_Расходов': 'Xarajat_izohi'  # НОВОЕ
     }
     df = df.rename(columns=mapping)
 
     df['Sana'] = pd.to_datetime(df['Sana']).dt.strftime('%d.%m.%Y %H:%M')
+
+    # Заполняем пустоты нулями для математики
     df['Smena_benzini'] = df['Smena_benzini'].fillna(0).astype(float)
+    df['Boshqa_xarajatlar'] = df['Boshqa_xarajatlar'].fillna(0).astype(float)
 
+    # ЛОГИКА РАСПРЕДЕЛЕНИЯ РАСХОДОВ:
+    # Считаем, сколько отгрузок было в каждой смене
     shift_counts = df.groupby('shift_id')['shift_id'].transform('count')
-    df['Benzin (ulushi)'] = df['Smena_benzini'] / shift_counts
-    df['Foyda_Marja'] = df['Tushum'] - df['Xarid_summasi'] - df['Benzin (ulushi)']
-    df = df.drop(columns=['shift_id', 'Smena_benzini'])
 
+    # Делим общие расходы смены на количество строк, чтобы честно посчитать прибыль каждой строки
+    df['Benzin (ulushi)'] = df['Smena_benzini'] / shift_counts
+    df['Boshqa (ulushi)'] = df['Boshqa_xarajatlar'] / shift_counts
+
+    # Итоговая маржа строки: Выручка - Закуп - Доля бензина - Доля прочих трат
+    df['Foyda_Marja'] = df['Tushum'] - df['Xarid_summasi'] - df['Benzin (ulushi)'] - df['Boshqa (ulushi)']
+
+    # Убираем технические колонки, но оставляем "Xarajat_izohi" для админа
+    df = df.drop(columns=['shift_id', 'Smena_benzini', 'Boshqa_xarajatlar'])
+
+    # ИТОГИ ПО САДИКАМ (добавляем доп. расходы)
     kg_summary = df.groupby("Bog'cha").agg({
-        "Tushum": "sum", "Xarid_summasi": "sum", "Benzin (ulushi)": "sum",
+        "Tushum": "sum", "Xarid_summasi": "sum",
+        "Benzin (ulushi)": "sum", "Boshqa (ulushi)": "sum",  # Добавили
         "Foyda_Marja": "sum", "Fakt": "count"
     }).rename(columns={"Fakt": "Yetkazib_berishlar_soni"}).reset_index()
 
+    # ИТОГИ ПО ТОВАРАМ (добавляем доп. расходы)
     prod_summary = df.groupby("Mahsulot").agg({
         "Fakt": "sum", "Tushum": "sum", "Xarid_summasi": "sum",
-        "Benzin (ulushi)": "sum", "Foyda_Marja": "sum"
+        "Benzin (ulushi)": "sum", "Boshqa (ulushi)": "sum",  # Добавили
+        "Foyda_Marja": "sum"
     }).reset_index()
 
-    df = pd.concat([df, pd.DataFrame([{
-        'Sana': 'JAMI:', 'Reja': df['Reja'].sum(), 'Fakt': df['Fakt'].sum(),
-        'Tushum': df['Tushum'].sum(), 'Xarid_summasi': df['Xarid_summasi'].sum(),
-        'Benzin (ulushi)': df['Benzin (ulushi)'].sum(), 'Foyda_Marja': df['Foyda_Marja'].sum()
-    }])], ignore_index=True)
+    # Добавляем финальную строку JAMI (Итого) для всех листов
+    def add_total_row(target_df, label_col, label_text):
+        numeric_cols = target_df.select_dtypes(include=['number']).columns
+        totals = target_df[numeric_cols].sum()
+        total_row = {col: totals[col] for col in numeric_cols}
+        total_row[label_col] = label_text
+        return pd.concat([target_df, pd.DataFrame([total_row])], ignore_index=True)
 
-    kg_summary = pd.concat([kg_summary, pd.DataFrame([{
-        'Bog\'cha': 'JAMI:', 'Yetkazib_berishlar_soni': kg_summary['Yetkazib_berishlar_soni'].sum(),
-        'Tushum': kg_summary['Tushum'].sum(), 'Xarid_summasi': kg_summary['Xarid_summasi'].sum(),
-        'Benzin (ulushi)': kg_summary['Benzin (ulushi)'].sum(), 'Foyda_Marja': kg_summary['Foyda_Marja'].sum()
-    }])], ignore_index=True)
+    df = add_total_row(df, 'Sana', 'JAMI:')
+    kg_summary = add_total_row(kg_summary, "Bog'cha", 'JAMI:')
+    prod_summary = add_total_row(prod_summary, "Mahsulot", 'JAMI:')
 
-    prod_summary = pd.concat([prod_summary, pd.DataFrame([{
-        'Mahsulot': 'JAMI:', 'Fakt': prod_summary['Fakt'].sum(),
-        'Tushum': prod_summary['Tushum'].sum(), 'Xarid_summasi': prod_summary['Xarid_summasi'].sum(),
-        'Benzin (ulushi)': prod_summary['Benzin (ulushi)'].sum(), 'Foyda_Marja': prod_summary['Foyda_Marja'].sum()
-    }])], ignore_index=True)
-
+    # Запись в файл
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name="Umumiy log", index=False) # "Общий лог"
-        kg_summary.to_excel(writer, sheet_name="Bog'chalar bo'yicha", index=False) # "Итоги по Садикам"
-        prod_summary.to_excel(writer, sheet_name="Mahsulotlar bo'yicha", index=False) # "Итоги по Товарам"
+        df.to_excel(writer, sheet_name="Umumiy log", index=False)
+        kg_summary.to_excel(writer, sheet_name="Bog'chalar bo'yicha", index=False)
+        prod_summary.to_excel(writer, sheet_name="Mahsulotlar bo'yicha", index=False)
 
+        # Автоподбор ширины колонок
         for sheet_name in writer.sheets:
             worksheet = writer.sheets[sheet_name]
             for col in worksheet.columns:
                 max_length = 0
+                column = col[0].column_letter
                 for cell in col:
                     if cell.value:
                         max_length = max(max_length, len(str(cell.value)))
-                worksheet.column_dimensions[col[0].column_letter].width = max_length + 2
+                worksheet.column_dimensions[column].width = max_length + 3
 
     output.seek(0)
     document = BufferedInputFile(output.getvalue(), filename=f"{filename_prefix}.xlsx")
 
-    await callback.message.answer_document(document, caption="✅ Excel-hisobot muvaffaqiyatli tayyorlandi.")
+    await callback.message.answer_document(document, caption="✅ Excel-hisobot tayyor!")
     # "✅ Excel-отчет успешно сформирован."
 
 # df = pd.DataFrame(raw_data)
@@ -1593,12 +1689,11 @@ async def admin_export_universal_excel(callback: types.CallbackQuery, session: A
 #         'Бензин (доля)': prod_summary['Бензин (доля)'].sum(), 'Прибыль_Маржа': prod_summary['Прибыль_Маржа'].sum()
 #     }])], ignore_index=True)
 
-# --- 3. ГЕНЕРАТОР PDF ---
+# --- 3. ГЕНЕРАТОР PDF (С КОММЕНТАРИЯМИ) ---
 @router.callback_query(F.data.startswith("adm_stats_dl_pdf:"))
 @router.callback_query(F.data == "adm_stats_export_all:pdf")
 async def admin_export_universal_pdf(callback: types.CallbackQuery, session: AsyncSession):
     await callback.answer("⏳ Batafsil PDF tayyorlanyapti (3 ta bo'lim)...", show_alert=False)
-    # "⏳ Формирую детальный PDF (3 раздела)..."
 
     if "dl_pdf" in callback.data:
         period = callback.data.split(":")[1]
@@ -1606,176 +1701,172 @@ async def admin_export_universal_pdf(callback: types.CallbackQuery, session: Asy
 
         if start_date.date() == end_date.date():
             title = f"{start_date.strftime('%d.%m.%Y')} SANA UCHUN HISOBOT"
-            # ОТЧЕТ ЗА
             filename_prefix = f"Hisobot_{start_date.strftime('%d%m')}"
-            # Report_
         else:
             title = f"{start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')} DAVRI UCHUN HISOBOT"
-            # ОТЧЕТ ЗА
             filename_prefix = f"Hisobot_{start_date.strftime('%d%m')}-{end_date.strftime('%d%m')}"
-            # Report_
     else:
         start_date, end_date = None, None
-        # ГЛОБАЛЬНЫЙ ОТЧЕТ (ВСЕ ВРЕМЯ)
         title = "UMUMIY HISOBOT (BARCHA VAQT UCHUN)"
-        filename_prefix = "Umumiy_Hisobot" # Global_Report
+        filename_prefix = "Umumiy_Hisobot"
 
     raw_data = await get_all_deliveries_for_export(session, start_date, end_date)
     if not raw_data:
-        await callback.answer("❌ Ushbu davr uchun ma'lumot topilmadi.", show_alert=True)
-        # "❌ За этот период нет данных.",
+        await callback.answer("❌ Ushбу davr uchun ma'lumot topilmadi.", show_alert=True)
         return
 
     df = pd.DataFrame(raw_data)
 
-    # Дополнил маппинг недостающими полями
+    # Обновленный маппинг (теперь с комментариями)
     df = df.rename(columns={
         'Дата': 'Sana',
-        'Водитель': 'Haydovchi',  # <--- Добавил
+        'Водитель': 'Haydovchi',
         'Садик': 'Bog\'cha',
         'Товар': 'Mahsulot',
-        'Ед_изм': 'O\'lchov_birligi',  # <--- Добавил
+        'Ед_изм': 'O\'lchov_birligi',
         'План': 'Reja',
         'Факт': 'Fakt',
-        'Цена_Садик': 'Bog\'cha_narxi',  # <--- ВОТ ЭТО БЫЛО НУЖНО
-        'Цена_Закуп': 'Xarid_narxi',  # <--- И ЭТО ТОЖЕ
+        'Цена_Садик': 'Bog\'cha_narxi',
+        'Цена_Закуп': 'Xarid_narxi',
         'Бензин_Смены': 'Smena_benzini',
+        'Другие_Расходы': 'Boshqa_xarajatlar',
+        'Комментарий_Расходов': 'Xarajat_izohi', # <--- ДОБАВИЛИ
         'Выручка': 'Tushum',
         'Закуп_сумма': 'Xarid_summasi'
     })
 
-
     df['Sana'] = pd.to_datetime(df['Sana']).dt.strftime('%d.%m %H:%M')
     df['Smena_benzini'] = df['Smena_benzini'].fillna(0).astype(float)
+    df['Boshqa_xarajatlar'] = df['Boshqa_xarajatlar'].fillna(0).astype(float)
+    df['Xarajat_izohi'] = df['Xarajat_izohi'].fillna("") # Убираем NaN в комментах
 
     shift_counts = df.groupby('shift_id')['shift_id'].transform('count')
     df['Benzin (ulushi)'] = df['Smena_benzini'] / shift_counts
-    df['Sof_foyda_marja'] = df['Tushum'] - df['Xarid_summasi'] - df['Benzin (ulushi)']
-    df = df.drop(columns=['shift_id', 'Smena_benzini'])
+    df['Boshqa (ulushi)'] = df['Boshqa_xarajatlar'] / shift_counts
+    df['Sof_foyda_marja'] = df['Tushum'] - df['Xarid_summasi'] - df['Benzin (ulushi)'] - df['Boshqa (ulushi)']
+    df = df.drop(columns=['shift_id', 'Smena_benzini', 'Boshqa_xarajatlar'])
+
+    # Агрегации для страниц 2 и 3 (функция add_jami остается прежней)
+    def add_jami(target_df, label_col):
+        numeric_cols = target_df.select_dtypes(include=['number']).columns
+        totals = target_df[numeric_cols].sum()
+        new_row = {col: totals[col] for col in numeric_cols}
+        new_row[label_col] = 'JAMI:'
+        return pd.concat([target_df, pd.DataFrame([new_row])], ignore_index=True)
 
     kg_summary = df.groupby("Bog'cha").agg({
         "Tushum": "sum", "Xarid_summasi": "sum", "Benzin (ulushi)": "sum",
-        "Sof_foyda_marja": "sum", "Fakt": "count"
+        "Boshqa (ulushi)": "sum", "Sof_foyda_marja": "sum", "Fakt": "count"
     }).rename(columns={"Fakt": "Soni"}).reset_index()
 
     prod_summary = df.groupby("Mahsulot").agg({
         "Fakt": "sum", "Tushum": "sum", "Xarid_summasi": "sum",
-        "Benzin (ulushi)": "sum", "Sof_foyda_marja": "sum"
+        "Benzin (ulushi)": "sum", "Boshqa (ulushi)": "sum", "Sof_foyda_marja": "sum"
     }).reset_index()
 
-    df = pd.concat([df, pd.DataFrame([{
-        'Sana': 'JAMI:', 'Reja': df['Reja'].sum(), 'Fakt': df['Fakt'].sum(),
-        'Tushum': df['Tushum'].sum(), 'Xarid_summasi': df['Xarid_summasi'].sum(),
-        'Benzin (ulushi)': df['Benzin (ulushi)'].sum(), 'Sof_foyda_marja': df['Sof_foyda_marja'].sum()
-    }])], ignore_index=True)
-
-    kg_summary = pd.concat([kg_summary, pd.DataFrame([{
-        'Bog\'cha': 'JAMI:', 'Soni': kg_summary['Soni'].sum(),
-        'Tushum': kg_summary['Tushum'].sum(), 'Xarid_summasi': kg_summary['Xarid_summasi'].sum(),
-        'Benzin (ulushi)': kg_summary['Benzin (ulushi)'].sum(), 'Sof_foyda_marja': kg_summary['Sof_foyda_marja'].sum()
-    }])], ignore_index=True)
-
-    prod_summary = pd.concat([prod_summary, pd.DataFrame([{
-        'Mahsulot': 'JAMI:', 'Fakt': prod_summary['Fakt'].sum(),
-        'Tushum': prod_summary['Tushum'].sum(), 'Xarid_summasi': prod_summary['Xarid_summasi'].sum(),
-        'Benzin (ulushi)': prod_summary['Benzin (ulushi)'].sum(),
-        'Sof_foyda_marja': prod_summary['Sof_foyda_marja'].sum()
-    }])], ignore_index=True)
+    full_df = add_jami(df, 'Sana')
+    kg_summary = add_jami(kg_summary, "Bog'cha")
+    prod_summary = add_jami(prod_summary, "Mahsulot")
 
     pdf = FPDF(orientation="L")
     pdf.add_page()
-
-    font_path = "fonts/arial.ttf"
-    if not os.path.exists(font_path):
-        await callback.message.answer(f"❌ '{font_path}' shrifti topilmadi.")
-        # f"❌ Шрифт '{font_path}' не найден."
-        return
-    pdf.add_font('MyArial', '', font_path, uni=True)
+    pdf.add_font('MyArial', '', "fonts/arial.ttf", uni=True)
 
     def fmt(val, is_num=True, max_len=15):
         if pd.isna(val): return ""
         if is_num:
             try:
                 return f"{int(float(val)):,}"
-            except:
-                return ""
+            except: return "0"
         return str(val)[:max_len]
 
+    # --- СТРАНИЦА 1: ОБЩИЙ ЛОГ (С ИЗОХОМ) ---
     pdf.set_font('MyArial', '', 14)
     pdf.cell(0, 10, title + " - 1-SAHIFA (UMUMIY LOG)", ln=True, align='C')
     pdf.ln(2)
 
-    pdf.set_font('MyArial', '', 7)
-    headers = [("Sana", 20), ("Haydovchi", 25), ("Bog'cha", 28), ("Mahsulot", 25),
-               ("Birl.", 8), ("Reja", 10), ("Fakt", 10), ("Bog'.N", 18),
-               ("Xar.N", 18), ("Tushum", 22), ("Xarid", 22), ("Benz.", 18), ("Marja", 24)]
+    pdf.set_font('MyArial', '', 6) # Немного уменьшили шрифт для плотности
+    # Пересчитанная ширина колонок (СУММА = 277)
+    headers = [
+        ("Sana", 18), ("Haydovchi", 20), ("Bog'cha", 24), ("Mahsulot", 22),
+        ("Birl.", 7), ("Reja", 9), ("Fakt", 9), ("Bog'.N", 16),
+        ("Xar.N", 16), ("Tushum", 18), ("Xarid", 18), ("Benz.", 15),
+        ("Boshqa", 15), ("Izoh", 48), ("Marja", 22) # Изменили ширину и добавили Izoh
+    ]
 
     for h, w in headers:
         pdf.cell(w, 7, h, 1, align='C')
     pdf.ln()
 
-    for _, row in df.iterrows():
-        if pdf.get_y() > 185:
+    for _, row in full_df.iterrows():
+        if pdf.get_y() > 180:
             pdf.add_page()
             for h, w in headers: pdf.cell(w, 7, h, 1, align='C')
             pdf.ln()
 
-        pdf.cell(20, 6, fmt(row.get('Sana'), False, 11), 1)
-        pdf.cell(25, 6, fmt(row.get('Haydovchi'), False), 1)
-        pdf.cell(28, 6, fmt(row.get('Bog\'cha'), False), 1)
-        pdf.cell(25, 6, fmt(row.get('Mahsulot'), False), 1)
-        pdf.cell(8, 6, fmt(row.get('O\'lchov_birligi'), False), 1, align='C')
-        pdf.cell(10, 6, fmt(row.get('Reja'), False), 1, align='C')
-        pdf.cell(10, 6, fmt(row.get('Fakt'), False), 1, align='C')
-        pdf.cell(18, 6, fmt(row.get('Bog\'cha_narxi')), 1, align='R')
-        pdf.cell(18, 6, fmt(row.get('Xarid_narxi')), 1, align='R')
-        pdf.cell(22, 6, fmt(row.get('Tushum')), 1, align='R')
-        pdf.cell(22, 6, fmt(row.get('Xarid_summasi')), 1, align='R')
-        pdf.cell(18, 6, fmt(row.get('Benzin (ulushi)')), 1, align='R')
-        pdf.cell(24, 6, fmt(row.get('Sof_foyda_marja')), 1, align='R')
+        pdf.cell(18, 6, fmt(row.get('Sana'), False, 11), 1)
+        pdf.cell(20, 6, fmt(row.get('Haydovchi'), False, 12), 1)
+        pdf.cell(24, 6, fmt(row.get('Bog\'cha'), False, 15), 1)
+        pdf.cell(22, 6, fmt(row.get('Mahsulot'), False, 15), 1)
+        pdf.cell(7, 6, fmt(row.get('O\'lchov_birligi'), False, 3), 1, align='C')
+        pdf.cell(9, 6, fmt(row.get('Reja'), False), 1, align='C')
+        pdf.cell(9, 6, fmt(row.get('Fakt'), False), 1, align='C')
+        pdf.cell(16, 6, fmt(row.get('Bog\'cha_narxi')), 1, align='R')
+        pdf.cell(16, 6, fmt(row.get('Xarid_narxi')), 1, align='R')
+        pdf.cell(18, 6, fmt(row.get('Tushum')), 1, align='R')
+        pdf.cell(18, 6, fmt(row.get('Xarid_summasi')), 1, align='R')
+        pdf.cell(15, 6, fmt(row.get('Benzin (ulushi)')), 1, align='R')
+        pdf.cell(15, 6, fmt(row.get('Boshqa (ulushi)')), 1, align='R')
+        pdf.cell(48, 6, fmt(row.get('Xarajat_izohi'), False, 35), 1) # <--- ВЫВОД КОММЕНТАРИЯ
+        pdf.cell(22, 6, fmt(row.get('Sof_foyda_marja')), 1, align='R')
         pdf.ln()
 
+    # --- СТРАНИЦА 2: САДИКИ ---
     pdf.add_page()
     pdf.set_font('MyArial', '', 14)
     pdf.cell(0, 10, "2-SAHIFA: BOG'CHALAR BO'YICHA YAKUNLAR", ln=True, align='C')
     pdf.ln(5)
 
     pdf.set_font('MyArial', '', 10)
-    kg_headers = [("Bog'cha", 60), ("Soni", 25), ("Tushum", 40), ("Xarid", 40), ("Benzin", 35), ("Marja", 40)]
+    kg_headers = [("Bog'cha", 60), ("Soni", 15), ("Tushum", 35), ("Xarid", 35), ("Benzin", 30), ("Boshqa", 30),
+                  ("Marja", 35)]
     for h, w in kg_headers: pdf.cell(w, 8, h, 1, align='C')
     pdf.ln()
 
     for _, row in kg_summary.iterrows():
         pdf.cell(60, 8, fmt(row.get('Bog\'cha'), False, 30), 1)
-        pdf.cell(25, 8, fmt(row.get('Soni'), False), 1, align='C')
-        pdf.cell(40, 8, fmt(row.get('Tushum')), 1, align='R')
-        pdf.cell(40, 8, fmt(row.get('Xarid_summasi')), 1, align='R')
-        pdf.cell(35, 8, fmt(row.get('Benzin (ulushi)')), 1, align='R')
-        pdf.cell(40, 8, fmt(row.get('Sof_foyda_marja')), 1, align='R')
+        pdf.cell(15, 8, fmt(row.get('Soni'), False), 1, align='C')
+        pdf.cell(35, 8, fmt(row.get('Tushum')), 1, align='R')
+        pdf.cell(35, 8, fmt(row.get('Xarid_summasi')), 1, align='R')
+        pdf.cell(30, 8, fmt(row.get('Benzin (ulushi)')), 1, align='R')
+        pdf.cell(30, 8, fmt(row.get('Boshqa (ulushi)')), 1, align='R')
+        pdf.cell(35, 8, fmt(row.get('Sof_foyda_marja')), 1, align='R')
         pdf.ln()
 
+    # --- СТРАНИЦА 3: ТОВАРЫ ---
     pdf.add_page()
     pdf.set_font('MyArial', '', 14)
     pdf.cell(0, 10, "3-SAHIFA: MAHSULOTLAR BO'YICHA YAKUNLAR", ln=True, align='C')
     pdf.ln(5)
 
     pdf.set_font('MyArial', '', 10)
-    prod_headers = [("Mahsulot", 60), ("Fakt", 25), ("Tushum", 40), ("Xarid", 40), ("Benzin", 35), ("Marja", 40)]
+    prod_headers = [("Mahsulot", 60), ("Fakt", 15), ("Tushum", 35), ("Xarid", 35), ("Benzin", 30), ("Boshqa", 30),
+                    ("Marja", 35)]
     for h, w in prod_headers: pdf.cell(w, 8, h, 1, align='C')
     pdf.ln()
 
     for _, row in prod_summary.iterrows():
         pdf.cell(60, 8, fmt(row.get('Mahsulot'), False, 30), 1)
-        pdf.cell(25, 8, fmt(row.get('Fakt'), False), 1, align='C')
-        pdf.cell(40, 8, fmt(row.get('Tushum')), 1, align='R')
-        pdf.cell(40, 8, fmt(row.get('Xarid_summasi')), 1, align='R')
-        pdf.cell(35, 8, fmt(row.get('Benzin (ulushi)')), 1, align='R')
-        pdf.cell(40, 8, fmt(row.get('Sof_foyda_marja')), 1, align='R')
+        pdf.cell(15, 8, fmt(row.get('Fakt'), False), 1, align='C')
+        pdf.cell(35, 8, fmt(row.get('Tushum')), 1, align='R')
+        pdf.cell(35, 8, fmt(row.get('Xarid_summasi')), 1, align='R')
+        pdf.cell(30, 8, fmt(row.get('Benzin (ulushi)')), 1, align='R')
+        pdf.cell(30, 8, fmt(row.get('Boshqa (ulushi)')), 1, align='R')
+        pdf.cell(35, 8, fmt(row.get('Sof_foyda_marja')), 1, align='R')
         pdf.ln()
 
-    pdf_output = pdf.output()
+    pdf_output = pdf.output(dest='S')
     document = BufferedInputFile(pdf_output, filename=f"{filename_prefix}.pdf")
-    # "✅ Детальный PDF-отчет сформирован (3 листа)."
     await callback.message.answer_document(document, caption="✅ Batafsil PDF-hisobot tayyorlandi (3 ta sahifa).")
 
 # df = pd.DataFrame(raw_data)
